@@ -152,3 +152,14 @@ Criado pelo `install.sh --cloud` em `~/.local/share/yoosee-viewer/`:
 - `wineprefix/` — prefixo Wine próprio.
 - `sdk/` — `IotVideoSDK.dll` + runtime MSVC, extraídos de uma instalação oficial do
   Yoosee ou do instalador `.exe`. **Essas DLLs não são redistribuídas** com o projeto.
+
+## Empacotamento Flatpak (`packaging/flatpak/`)
+
+Alternativa ao `install.sh`: um Flatpak **auto-contido**, com o Wine embutido
+(`base: org.winehq.Wine`) — quem instala não precisa de Wine/Bottles separado.
+`p2p.py` não precisou de nenhuma mudança: a detecção de Wine já tentava
+`shutil.which("wine")` antes do Bottles, e dentro do sandbox `/app/bin` (onde
+mora o Wine embutido) já está no `PATH`. O `IotVideoSDK.dll` continua não sendo
+redistribuído; dentro do app, o menu da conta ganha "Configurar câmeras pela
+nuvem…" (só no Flatpak) para o usuário apontar o arquivo via seletor nativo.
+Detalhes completos em `packaging/flatpak/README.md`.

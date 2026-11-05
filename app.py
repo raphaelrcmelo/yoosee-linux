@@ -19,8 +19,8 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QGridLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+    QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QStackedWidget, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -634,6 +634,21 @@ class MainWindow(QMainWindow):
         menu.addAction("Adicionar conta…", self.add_account)
         if self.account:
             menu.addAction("Sair desta conta", self.logout)
+        if os.environ.get("FLATPAK_ID") and p2p.WINE and not p2p.available():
+            menu.addSeparator()
+            menu.addAction("Configurar câmeras pela nuvem…", self.import_cloud_sdk)
+
+    def import_cloud_sdk(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Selecione o arquivo IotVideoSDK.dll",
+            os.path.expanduser("~"), "IotVideoSDK.dll (IotVideoSDK.dll);;Todos os arquivos (*)")
+        if not path:
+            return
+        ok, message = p2p.import_sdk(path)
+        self._flash(message)
+        if ok:
+            self._rebuild_account_menu()
+            self._fill_device_list()
 
     def add_account(self, email: str = ""):
         dlg = LoginDialog(self, email)

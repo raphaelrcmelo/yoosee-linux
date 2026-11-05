@@ -1,0 +1,152 @@
+id: io.github.raphaelrcmelo.YooseeViewer
+runtime: org.freedesktop.Sdk
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+# O runtime precisa ser o Sdk (não o Platform) porque o app é Python puro e o
+# Platform não traz interpretador — mesmo padrão usado por outros apps Python no
+# Flathub (ex.: org.flathub.flatpak-external-data-checker).
+base: org.winehq.Wine
+base-version: wow64-25.08
+# Wine embutido, só para câmeras fora da rede local (SDK oficial da Yoosee/Gwell).
+# Sem isso o usuário precisaria instalar Wine/Bottles separadamente — ver ARQUITETURA.md.
+command: yoosee-viewer
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=xdg-pictures/yoosee-screenshots:create
+modules:
+  - name: krb5
+    buildsystem: autotools
+    subdir: src
+    build-options:
+      env:
+        # krb5 1.21 usa declarações de função estilo K&R que o GCC 14+ trata
+        # como erro por padrão; volta ao comportamento antigo (aviso, não erro).
+        CFLAGS: -std=gnu11 -Wno-error
+    config-opts:
+      - --without-ldap
+      - --without-tcl
+      - --disable-rpath
+    cleanup:
+      - /bin
+      - /sbin
+      - /share/man
+      - /share/examples
+      - /include
+      - /lib/*.a
+      - /lib/*.la
+      - /lib/krb5
+    sources:
+      - type: archive
+        url: https://kerberos.org/dist/krb5/1.21/krb5-1.21.3.tar.gz
+        sha256: b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35
+
+  - name: ffmpeg
+    buildsystem: autotools
+    # Build mínimo: só o que p2p.py usa (remux -c copy, sem decodificar/codificar
+    # nada) — sem codecs, então sem questões de licença de patente.
+    config-opts:
+      - --disable-everything
+      - --disable-autodetect
+      - --disable-doc
+      - --disable-ffplay
+      - --enable-shared
+      - --disable-static
+      - --enable-protocol=tcp,udp,file
+      - --enable-demuxer=h264,hevc,aac,rawvideo,mpegts
+      - --enable-muxer=mpegts
+      - --enable-parser=h264,hevc,aac
+      - --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/ffmpeg
+      - '*.la'
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
+        sha256: 089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
+
+  - name: winpython-embed
+    buildsystem: simple
+    # Python Windows embeddable (python.org, checksum fixo) — a mesma SDK que
+    # winsdk/bridge.py usa fora do Flatpak, aqui pré-empacotada. p2p.ensure_winpython()
+    # copia daqui para a pasta de dados do app no primeiro uso da nuvem.
+    build-commands:
+      - mkdir -p /app/share/yoosee-viewer-assets/winpython
+      - cp -r . /app/share/yoosee-viewer-assets/winpython/
+    sources:
+      - type: archive
+        url: https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+        sha256: 4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3
+
+  - name: python-deps
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST}
+        --no-build-isolation PySide6-Essentials PySide6-Addons shiboken6 requests
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/f9/4c/ce3dc6a71161b6fd8c007051729914cc79c049b33f041adca1db46d31f1d/PySide6_Essentials-6.8.2-cp39-abi3-manylinux_2_28_x86_64.whl
+        sha256: 341d3023da4d74605e354974346234007065208b40740732c6f69e1d33e70835
+      - type: file
+        url: https://files.pythonhosted.org/packages/24/30/6af408565e8d9a979f93f75e3c85d2877acd4654400ebd32d2b9f0a99feb/PySide6_Addons-6.8.2-cp39-abi3-manylinux_2_28_x86_64.whl
+        sha256: bf27526c48e7fab7180754957f6b2bbf2226285298043dd54533a97006e65542
+      - type: file
+        url: https://files.pythonhosted.org/packages/77/79/204d6d8d9892f36d46b40815aab770620191c141ab98851eb708683588f9/shiboken6-6.8.2-cp39-abi3-manylinux_2_28_x86_64.whl
+        sha256: 924c23bed7c0b6ff8a308f4e12e5a9681f720c22d1be339cac01591feb7ebb32
+      - type: file
+        url: https://files.pythonhosted.org/packages/f9/9b/335f9764261e915ed497fcdeb11df5dfd6f7bf257d4a6a2a686d80da4d54/requests-2.32.3-py3-none-any.whl
+        sha256: 70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6
+      - type: file
+        url: https://files.pythonhosted.org/packages/4b/85/41d27f234b82e47c167a5f6c0f62501dc0c640585ff4aba79e08a390336a/charset_normalizer-3.5.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 7218e8f32b0956cfcd048fd42d9d5779809745ca1d86113ca56f66e7ae1549c4
+      - type: file
+        url: https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl
+        sha256: ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+      - type: file
+        url: https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl
+        sha256: 0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+      - type: file
+        url: https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl
+        sha256: e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+
+  - name: yoosee-viewer
+    buildsystem: simple
+    build-commands:
+      - install -d /app/share/yoosee-viewer/winsdk
+      - install -m644 app.py lan.py p2p.py ptz.py settings.py store.py yoosee_api.py
+        /app/share/yoosee-viewer/
+      - install -m644 bridge.py /app/share/yoosee-viewer/winsdk/
+      - install -Dm755 yoosee-viewer.sh /app/bin/yoosee-viewer
+      - install -Dm644 yoosee-viewer.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.raphaelrcmelo.YooseeViewer.svg
+      - install -Dm644 io.github.raphaelrcmelo.YooseeViewer.desktop
+        /app/share/applications/io.github.raphaelrcmelo.YooseeViewer.desktop
+    sources:
+      - type: file
+        path: ../../app.py
+      - type: file
+        path: ../../lan.py
+      - type: file
+        path: ../../p2p.py
+      - type: file
+        path: ../../ptz.py
+      - type: file
+        path: ../../settings.py
+      - type: file
+        path: ../../store.py
+      - type: file
+        path: ../../yoosee_api.py
+      - type: file
+        path: ../../winsdk/bridge.py
+      - type: file
+        path: ../yoosee-viewer.svg
+      - type: file
+        path: yoosee-viewer.sh
+      - type: file
+        path: io.github.raphaelrcmelo.YooseeViewer.desktop

@@ -19,6 +19,10 @@ cd yoosee-viewer
 Depois abra **Câmeras Yoosee** no menu de aplicativos (ou rode `yoosee-viewer`).
 Não precisa de `sudo`; tudo fica na sua pasta pessoal.
 
+**Alternativa Flatpak**: `packaging/flatpak/` traz um empacotamento auto-contido,
+com o Wine das câmeras fora da rede já embutido — não precisa instalar Wine ou
+Bottles separado. Veja `packaging/flatpak/README.md`.
+
 ### Câmeras fora da sua rede (outra casa, compartilhadas)
 
 Essas câmeras só abrem pelo SDK oficial da Yoosee, que é para Windows e roda aqui

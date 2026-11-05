@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Câmeras Yoosee
+Comment=Visualizador de câmeras Yoosee com PTZ e múltiplas contas
+Exec=yoosee-viewer
+Icon=io.github.raphaelrcmelo.YooseeViewer
+Terminal=false
+Categories=AudioVideo;Video;

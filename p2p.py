@@ -40,6 +40,52 @@ WIN_PYTHON = os.path.join(RUNTIME_DIR, "winpython", "python.exe")
 SDK_DIR = os.path.join(RUNTIME_DIR, "sdk")
 BRIDGE = os.path.join(PROJECT_DIR, "winsdk", "bridge.py")
 
+# Só existe dentro do Flatpak (empacotado em build-time, junto com o Wine embutido).
+# Fora dele, quem cuida do winpython é o install.sh --cloud (baixa com checksum verificado).
+BUNDLED_WINPYTHON = "/app/share/yoosee-viewer-assets/winpython"
+RUNTIME_MSVC_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
+
+
+def ensure_winpython() -> bool:
+    """Garante o Python Windows embeddable em RUNTIME_DIR/winpython. True se já existia ou foi copiado."""
+    if os.path.exists(WIN_PYTHON):
+        return True
+    if os.path.isdir(BUNDLED_WINPYTHON):
+        shutil.copytree(BUNDLED_WINPYTHON, os.path.join(RUNTIME_DIR, "winpython"), dirs_exist_ok=True)
+        return os.path.exists(WIN_PYTHON)
+    return False
+
+
+def _wine_system32() -> str | None:
+    """.../lib/wine/x86_64-windows do Wine em uso, se for o embutido no Flatpak (traz suas próprias DLLs MSVC)."""
+    if not WINE or WINE_RUNNER:
+        return None
+    candidate = os.path.join(os.path.dirname(os.path.dirname(WINE)), "lib", "wine", "x86_64-windows")
+    return candidate if os.path.isdir(candidate) else None
+
+
+def import_sdk(dll_path: str) -> tuple[bool, str]:
+    """Copia um IotVideoSDK.dll já extraído (de uma instalação ou instalador oficial do Yoosee)
+    para SDK_DIR, junto com as DLLs do runtime MSVC (do próprio Wine embutido, se disponível,
+    senão da mesma pasta do arquivo escolhido). Não redistribui nada: o arquivo vem do usuário."""
+    if not os.path.basename(dll_path).lower() == "iotvideosdk.dll":
+        return False, "Selecione o arquivo IotVideoSDK.dll."
+    if not ensure_winpython():
+        return False, "Python para Windows não encontrado (reinstale o aplicativo)."
+    os.makedirs(SDK_DIR, mode=0o700, exist_ok=True)
+    shutil.copy2(dll_path, os.path.join(SDK_DIR, "IotVideoSDK.dll"))
+    source_dir = _wine_system32() or os.path.dirname(dll_path)
+    missing = []
+    for name in RUNTIME_MSVC_DLLS:
+        src = os.path.join(source_dir, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(SDK_DIR, name))
+        else:
+            missing.append(name)
+    if missing:
+        return False, f"IotVideoSDK.dll copiado, mas faltam: {', '.join(missing)}."
+    return True, "Câmeras pela nuvem configuradas."
+
 PTZ_CODES = {"left": 0, "right": 1, "up": 2, "down": 3}
 
 

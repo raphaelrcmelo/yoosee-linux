@@ -8,3 +8,8 @@ PROTOCOLO.md
 .venv/
 __pycache__/
 dist/
+
+# estado/build local do flatpak-builder (nunca é saída final, só cache)
+packaging/flatpak/.flatpak-builder/
+packaging/flatpak/build-dir/
+packaging/flatpak/repo/
