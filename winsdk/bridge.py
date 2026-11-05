@@ -89,15 +89,32 @@ send_user_data = fn("?sendUserData@IoTVideoPlayer@@QEAAHPEAEH@Z", c_int, c_void_
 sdk_lock = threading.RLock()  # serializa as chamadas de controle dos players
 
 
-def has_sps(packet: bytes) -> bool:
-    """Contém parâmetros de sequência? (H.264 SPS = 7; H.265 VPS/SPS = 32/33)."""
-    i = packet.find(b"\x00\x00\x01")
-    while i != -1 and i + 3 < len(packet):
-        header = packet[i + 3]
-        if header & 0x1F == 7 or (header >> 1) & 0x3F in (32, 33):
-            return True
-        i = packet.find(b"\x00\x00\x01", i + 3)
-    return False
+# H.264: 7=SPS, 8=PPS, 5=IDR. H.265: 32=VPS, 33=SPS, 34=PPS, 19/20=IDR.
+# Um NAL de parâmetros de verdade é sempre curto (poucas dezenas de bytes); um "match"
+# em algo maior é lixo dentro de um NAL de slice comum — já vimos isso dar falso positivo.
+PARAM_SET_H264 = {7, 8}
+PARAM_SET_HEVC = {32, 33, 34}
+IDR_H264 = {5}
+IDR_HEVC = {19, 20}
+MAX_PARAM_SET_LEN = 200
+
+
+def iter_nals(data: bytes):
+    """(tipo_h264, tipo_hevc, posição inicial, bytes_do_nal_com_start_code) de cada NAL
+    em `data` (Annex-B puro: NALs emendados por start code de 3 ou 4 bytes)."""
+    marks = []
+    i = data.find(b"\x00\x00\x01")
+    while i != -1:
+        marks.append(i)
+        i = data.find(b"\x00\x00\x01", i + 3)
+    for idx, pos in enumerate(marks):
+        header_pos = pos + 3
+        if header_pos >= len(data):
+            continue
+        start = pos - 1 if pos >= 1 and data[pos - 1] == 0 else pos
+        end = marks[idx + 1] if idx + 1 < len(marks) else len(data)
+        header = data[header_pos]
+        yield header & 0x1F, (header >> 1) & 0x3F, start, data[start:end]
 
 
 channels: dict[str, "Channel"] = {}
@@ -113,9 +130,12 @@ class Channel:
         self.audio_sink = socket.create_connection(("127.0.0.1", audio_port)) if audio_port else None
         self.audio_started = False
         self.closed = False
-        # Algumas câmeras (H.264, GOP de ~6 s) começam no meio do GOP: sem descartar até
-        # o primeiro SPS, o probe do ffmpeg/QMediaPlayer desiste antes de achar um keyframe.
+        # Algumas câmeras começam no meio do GOP, ou só mandam SPS/PPS uma vez (não a
+        # cada keyframe): sem isso, o player recebia slices sem o parâmetro que as
+        # decodifica ("non-existing PPS referenced"). Guarda os parâmetros mais recentes
+        # vistos e só libera o encaminhamento a partir de um IDR de verdade, prefixando-os.
         self.waiting_keyframe = True
+        self.param_sets: dict[int, bytes] = {}
         self.decoder = crt.calloc(1, 512)
         c_void_p.from_address(self.decoder).value = ctypes.addressof(vtable)
         self.player = crt.calloc(1, 65536)
@@ -137,6 +157,7 @@ class Channel:
                 set_resource(self.player, self.dev_id.encode(), 0, DEFINITION_HD, 0)
                 prepare(self.player)
                 self.waiting_keyframe = True
+                self.param_sets = {}
             for _ in range(100):
                 time.sleep(0.05)
                 state = get_state(self.player)
@@ -167,14 +188,30 @@ class Channel:
     def on_packet(self, data_ptr: int, size: int):
         if self.closed:
             return
-        if self.waiting_keyframe:
-            if not has_sps(ctypes.string_at(data_ptr, min(size, 4096))):
-                return
-            self.waiting_keyframe = False
-            report(self.name, "STATE video")
+        data = ctypes.string_at(data_ptr, size)
+        if not self.waiting_keyframe:
+            try:
+                self.sink.sendall(data)
+            except OSError:  # o repasse do lado Linux fechou: encerra só este canal
+                threading.Thread(target=self.close, daemon=True).start()
+            return
+
+        idr_start = None
+        for h264_t, hevc_t, start, nal in iter_nals(data):
+            if len(nal) <= MAX_PARAM_SET_LEN and (h264_t in PARAM_SET_H264 or hevc_t in PARAM_SET_HEVC):
+                self.param_sets[h264_t if h264_t in PARAM_SET_H264 else 100 + hevc_t] = nal
+            elif h264_t in IDR_H264 or hevc_t in IDR_HEVC:
+                idr_start = start
+                break
+        if idr_start is None:
+            return
+        self.waiting_keyframe = False
+        report(self.name, "STATE video")
         try:
-            self.sink.sendall(ctypes.string_at(data_ptr, size))
-        except OSError:  # o ffmpeg do lado Linux fechou: encerra só este canal
+            for param in self.param_sets.values():
+                self.sink.sendall(param)
+            self.sink.sendall(data[idr_start:])
+        except OSError:
             threading.Thread(target=self.close, daemon=True).start()
 
     def on_audio_packet(self, data_ptr: int, size: int):
@@ -185,7 +222,7 @@ class Channel:
             report(self.name, "STATE audio " + ctypes.string_at(data_ptr, min(size, 8)).hex())
         try:
             self.audio_sink.sendall(ctypes.string_at(data_ptr, size))
-        except OSError:  # o ffmpeg de áudio fechou: segue só com vídeo
+        except OSError:  # o repasse de áudio fechou: segue só com vídeo
             self.audio_sink = None
 
     def ptz(self, direction: str):

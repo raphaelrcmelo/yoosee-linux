@@ -15,9 +15,6 @@ não precisa de Wine/Bottles separado no sistema. Veja "Câmeras fora da rede" e
 - `krb5`: compilado da fonte (kerberos.org). Necessário porque `libQt6Network.so`
   (parte do PySide6-Addons) depende de `libgssapi_krb5.so.2`, que o runtime não
   tem — mesmo padrão usado por LibreOffice e GNOME Epiphany no Flathub.
-- `ffmpeg`: build mínimo (`--disable-everything` + só os protocolos/demuxers/
-  muxer que `p2p.py` usa). Sem codecs: é só remux `-c copy`, nunca decodifica ou
-  codifica nada, então não há questão de licença de codec envolvida.
 - `winpython-embed`: o Python Windows embeddable (mesmo zip e checksum do
   `install.sh`), pré-empacotado em `/app/share/yoosee-viewer-assets/winpython`.
   `p2p.ensure_winpython()` copia daqui na primeira vez que a nuvem é usada.

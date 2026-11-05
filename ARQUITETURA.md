@@ -76,26 +76,50 @@ conta): todas as câmeras abertas da conta compartilham um `Register`, cada uma 
 "canal". Comandos pela stdin da ponte: `open <canal> <devId> <porta_vídeo> [porta_áudio]`,
 `close <canal>`, `ptz <canal> <0-3>`.
 
-### Lado Linux (`p2p.py`)
+### Lado Linux (`p2p.py`) — repasse direto, sem remux
 
-Para cada câmera remota, dois `ffmpeg` fazem remux dos streams locais para MPEG-TS em
-UDP, que o `QMediaPlayer` toca:
+Os bytes crus (H.264/H.265 Annex-B, AAC/ADTS) vão da ponte direto pro `QMediaPlayer`,
+**sem nenhum ffmpeg no meio**:
 
 ```
-bridge (Wine) --TCP--> ffmpeg (-c copy -> mpegts) --UDP--> QMediaPlayer (vídeo)
-             \--TCP--> ffmpeg (-f aac  -> mpegts) --UDP--> QMediaPlayer (áudio)
+bridge (Wine) --TCP--> _RawRelay (vídeo) --TCP--> QMediaPlayer
+             \--TCP--> _RawRelay (áudio) --TCP--> QMediaPlayer
 ```
 
-Vídeo e áudio são separados de propósito: se a câmera não mandar áudio, o vídeo não
-espera por ele. Um `_Bridge` por conta, encerrado após ~20 s ocioso; `atexit` garante
-o fim dos processos.
+`_RawRelay` é só um encaminhador de bytes em Python puro: dois sockets TCP (a ponte
+conecta como cliente num, o `QMediaPlayer` conecta como cliente no outro) e uma thread
+que repassa o que chega de um pro outro. Os demuxers `h264`/`hevc`/`aac` do FFmpeg
+(usados internamente pelo `QMediaPlayer`) reconhecem o formato pelos próprios bytes,
+sem precisar de contêiner nem de um `-f` explícito.
+
+Isso substituiu uma versão anterior com **dois** `ffmpeg` de remux (um nosso + o do
+próprio `QMediaPlayer`) — uma etapa inteira de probe/remux a mais que o app oficial
+não tem. Removê-la cortou o tempo entre "o vídeo chegou" e o primeiro quadro na tela de
+8-16 s para ~2-3 s. O que resta de lento (a negociação P2P em si, variável, às vezes
+20-30 s neste SDK) é proprietário e fora do nosso controle.
+
+Vídeo e áudio continuam em relés separados de propósito: se a câmera não mandar áudio,
+o vídeo não espera por ele. Um `_Bridge` por conta, encerrado após ~20 s ocioso;
+`atexit` garante o fim dos processos.
+
+Abrir várias câmeras da mesma conta quase ao mesmo tempo trava algumas delas sem
+nunca conectar (confirmado: testando sem espaçamento, metade ficava presa
+indefinidamente). `_throttle_cloud_open` enfileira os comandos `open` com um intervalo
+mínimo (`CLOUD_OPEN_SPACING`) entre eles — não ajuda a negociação em si ficar mais
+rápida, mas evita que algumas câmeras travem de vez.
 
 ### Detalhes que custaram a achar
 
-- **Keyframe**: algumas câmeras H.264 (GOP de ~6 s) começam no meio do GOP. Sem
-  descartar os pacotes até o primeiro SPS, o probe do ffmpeg/QMediaPlayer desiste antes
-  de achar um keyframe e o vídeo nunca aparece. A ponte segura até o 1º SPS e só então
-  emite `STATE video`; o app só abre o player nesse momento.
+- **Keyframe sem SPS/PPS de verdade**: o jeito antigo de detectar o primeiro keyframe
+  (buscar um padrão de bytes "parece SPS" numa janela de até 4096 bytes do pacote) dava
+  **falso positivo** — um NAL de slice comum, grande, podia conter por acaso uma
+  sequência de bytes com a cara de um cabeçalho SPS/HEVC, disparando o início do envio
+  num ponto onde nunca existia um SPS/PPS real. O player então recebia slices sem o
+  parâmetro que as decodifica ("non-existing PPS referenced") e nunca abria. A correção:
+  `iter_nals()` percorre os NALs pelos limites reais (posições dos start codes), guarda
+  o SPS/PPS/VPS mais recente visto (um NAL de parâmetro de verdade é sempre curto, o que
+  também descarta o falso positivo por tamanho) e só libera o encaminhamento a partir de
+  um IDR genuíno, prefixando os parâmetros guardados.
 - **Token no stdout**: o SDK escreve o `accessToken` em claro no stdout. A ponte manda
   eventos pelo stderr (`STATE …`/`ERROR …`/`PTZ …`) e o lado Linux descarta o stdout.
 - **Reconexão**: se a ponte cair, cada câmera reconecta sozinha (até 3 tentativas).

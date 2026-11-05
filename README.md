@@ -29,7 +29,6 @@ Essas câmeras só abrem pelo SDK oficial da Yoosee, que é para Windows e roda 
 via Wine. Instale antes:
 
 - **Wine**, ou o [Bottles](https://flathub.org/apps/com.usebottles.bottles) pelo Flathub
-- **ffmpeg**
 - o instalador oficial para Windows, **Yoosee-x.y.z.exe**, baixado de
   <https://www.yoosee.co>. O script só tira dele a biblioteca do SDK.
 

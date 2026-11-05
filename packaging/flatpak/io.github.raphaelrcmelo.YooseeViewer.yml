@@ -45,32 +45,6 @@ modules:
         url: https://kerberos.org/dist/krb5/1.21/krb5-1.21.3.tar.gz
         sha256: b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35
 
-  - name: ffmpeg
-    buildsystem: autotools
-    # Build mínimo: só o que p2p.py usa (remux -c copy, sem decodificar/codificar
-    # nada) — sem codecs, então sem questões de licença de patente.
-    config-opts:
-      - --disable-everything
-      - --disable-autodetect
-      - --disable-doc
-      - --disable-ffplay
-      - --enable-shared
-      - --disable-static
-      - --enable-protocol=tcp,udp,file
-      - --enable-demuxer=h264,hevc,aac,rawvideo,mpegts
-      - --enable-muxer=mpegts
-      - --enable-parser=h264,hevc,aac
-      - --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
-    cleanup:
-      - /include
-      - /lib/pkgconfig
-      - /share/ffmpeg
-      - '*.la'
-    sources:
-      - type: archive
-        url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
-        sha256: 089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
-
   - name: winpython-embed
     buildsystem: simple
     # Python Windows embeddable (python.org, checksum fixo) — a mesma SDK que

@@ -159,8 +159,6 @@ install_cloud() {
     WINE="$(find_wine)" || die "Wine não encontrado. $(hint_pkg wine wine wine)
    (ou instale o Bottles pelo Flathub, ou aponte YOOSEE_WINE=/caminho/do/wine)"
     ok "Wine: $WINE"
-    command -v ffmpeg >/dev/null || die "ffmpeg não encontrado. $(hint_pkg ffmpeg ffmpeg ffmpeg)"
-    ok "ffmpeg"
     if [ ! -f "$RUNTIME/wineprefix/system.reg" ]; then
         say "Criando prefixo Wine (primeira vez demora ~1 min)"
         mkdir -p "$RUNTIME/wineprefix"

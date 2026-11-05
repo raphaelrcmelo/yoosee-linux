@@ -1,7 +1,8 @@
 """Câmeras fora da rede local, via SDK oficial (IotVideoSDK.dll) rodando no Wine.
 
-winsdk/bridge.py entrega o vídeo comprimido por TCP local; um ffmpeg o reempacota
-em MPEG-TS com timestamps de chegada e serve em UDP local para o QMediaPlayer.
+winsdk/bridge.py entrega o vídeo/áudio já comprimidos (H.264/H.265, AAC) por TCP
+local; _RawRelay repassa os bytes crus, sem remux, direto pro QMediaPlayer (os
+demuxers dele reconhecem o formato sem precisar de contêiner).
 Runtime (Python Windows, prefixo Wine, DLLs) em ~/.local/share/yoosee-viewer/.
 """
 import atexit
@@ -95,12 +96,6 @@ def available() -> bool:
 
 def _wine_path(path: str) -> str:
     return "Z:" + path.replace("/", "\\")
-
-
-def _free_port(kind: int) -> int:
-    with socket.socket(socket.AF_INET, kind) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _wine_env() -> dict:
@@ -199,6 +194,26 @@ _bridges: dict[str, _Bridge] = {}
 _bridges_lock = threading.Lock()
 _channel_ids = itertools.count(1)
 
+# Mandar o SDK conectar várias câmeras quase ao mesmo tempo (mesma conta) faz
+# algumas travarem sem conectar nunca (testado: 2 de 4 ficavam presas; espaçando,
+# as 4 conectam). Fila simples: um "open" por vez, com um intervalo mínimo entre eles.
+CLOUD_OPEN_SPACING = 3.0
+_cloud_open_lock = threading.Lock()
+_next_cloud_open = 0.0
+
+
+def _throttle_cloud_open(bridge: "_Bridge", line: str) -> None:
+    def worker():
+        with _cloud_open_lock:
+            global _next_cloud_open
+            wait = max(0.0, _next_cloud_open - time.monotonic())
+            _next_cloud_open = time.monotonic() + wait + CLOUD_OPEN_SPACING
+        if wait:
+            time.sleep(wait)
+        bridge.send(line)
+
+    threading.Thread(target=worker, daemon=True).start()
+
 
 def _bridge_for(account_file: str) -> _Bridge:
     with _bridges_lock:
@@ -217,9 +232,101 @@ def shutdown():
         bridge.kill()
 
 
+class _RawRelay:
+    """Repassa bytes crus (H.264/H.265 Annex-B ou AAC/ADTS) da ponte (TCP, conecta como
+    cliente) direto para o QMediaPlayer (TCP, também conecta como cliente) — sem nenhum
+    ffmpeg/remux no meio. Os demuxers "h264"/"hevc"/"aac" do FFmpeg reconhecem o formato
+    pelos próprios bytes, sem precisar de contêiner; isso elimina uma rodada inteira de
+    probe+remux, que custava vários segundos (o app oficial também decodifica direto,
+    sem remuxar nada — essa etapa só existia aqui por nossa causa)."""
+
+    MAX_BUFFER = 4_000_000  # evita crescer sem limite se o player nunca conectar
+
+    def __init__(self):
+        self._bridge_srv = self._listen()
+        self._player_srv = self._listen()
+        self.bridge_port = self._bridge_srv.getsockname()[1]
+        self.player_port = self._player_srv.getsockname()[1]
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
+        self._player_conn: socket.socket | None = None
+        self._bridge_conn: socket.socket | None = None
+        self._stopped = False
+        threading.Thread(target=self._run, daemon=True).start()
+        threading.Thread(target=self._accept_player, daemon=True).start()
+
+    @staticmethod
+    def _listen() -> socket.socket:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        return s
+
+    def _run(self):
+        # Todo envio pro player (daqui ou de _accept_player) acontece sob o mesmo lock,
+        # pra garantir a ordem dos bytes: sem isso, o buffer acumulado antes do player
+        # conectar podia ser mandado DEPOIS de bytes mais novos chegando em paralelo,
+        # corrompendo o fluxo (o QMediaPlayer falhava com "Could not open file").
+        try:
+            self._bridge_srv.settimeout(60)
+            self._bridge_conn, _ = self._bridge_srv.accept()
+            self._bridge_conn.settimeout(None)
+            while not self._stopped:
+                data = self._bridge_conn.recv(65536)
+                if not data:
+                    break
+                with self._lock:
+                    if self._player_conn is None:
+                        self._buffer.extend(data)
+                        del self._buffer[:-self.MAX_BUFFER]
+                    else:
+                        try:
+                            self._player_conn.sendall(data)
+                        except OSError:
+                            break
+        except OSError:
+            pass
+        self.stop()
+
+    def _accept_player(self):
+        try:
+            self._player_srv.settimeout(60)
+            conn, _ = self._player_srv.accept()
+            conn.settimeout(None)
+        except OSError:
+            return
+        with self._lock:
+            if self._stopped:
+                conn.close()
+                return
+            pending = bytes(self._buffer)
+            self._buffer.clear()
+            self._player_conn = conn
+            try:
+                if pending:
+                    conn.sendall(pending)
+            except OSError:
+                pass
+
+    def stop(self):
+        with self._lock:
+            if self._stopped:
+                return
+            self._stopped = True
+            sockets = (self._bridge_conn, self._player_conn, self._bridge_srv, self._player_srv)
+        for sock in sockets:
+            try:
+                if sock:
+                    sock.close()
+            except OSError:
+                pass
+
+
 class RemoteStream:
-    """Uma câmera remota: um canal na ponte da conta + um ffmpeg de remux para o vídeo
-    e outro para o áudio (AAC/ADTS). Separados para o vídeo não esperar por câmeras sem áudio."""
+    """Uma câmera remota: um canal na ponte da conta + repasse direto (sem remux) para o
+    QMediaPlayer, um para o vídeo e outro para o áudio (AAC/ADTS). Separados para o vídeo
+    não esperar por câmeras sem áudio."""
 
     def __init__(self, account_file: str, dev_id: str, on_event=None):
         self.account_file = account_file
@@ -227,34 +334,22 @@ class RemoteStream:
         self.on_event = on_event
         self.channel = str(next(_channel_ids))
         self.bridge: _Bridge | None = None
-        self.ffmpeg: subprocess.Popen | None = None
-        self.audio_ffmpeg: subprocess.Popen | None = None
+        self.video_relay: _RawRelay | None = None
+        self.audio_relay: _RawRelay | None = None
         self.url: str | None = None
         self.audio_url: str | None = None
 
-    @staticmethod
-    def _remux(tcp_port: int, udp_port: int, input_args: list[str]) -> subprocess.Popen:
-        return subprocess.Popen(
-            ["ffmpeg", "-loglevel", "error", "-use_wallclock_as_timestamps", "1",
-             "-fflags", "nobuffer", "-flags", "low_delay", *input_args,
-             "-i", f"tcp://127.0.0.1:{tcp_port}?listen=1",
-             "-c", "copy", "-muxdelay", "0", "-flush_packets", "1",
-             "-f", "mpegts", f"udp://127.0.0.1:{udp_port}?pkt_size=1316"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-
     def start(self) -> str:
-        tcp_port, udp_port = _free_port(socket.SOCK_STREAM), _free_port(socket.SOCK_DGRAM)
-        audio_tcp, audio_udp = _free_port(socket.SOCK_STREAM), _free_port(socket.SOCK_DGRAM)
-        self.ffmpeg = self._remux(tcp_port, udp_port, ["-probesize", "2M", "-analyzeduration", "2M"])
-        self.audio_ffmpeg = self._remux(audio_tcp, audio_udp, ["-f", "aac"])
-        _wait_listening(tcp_port)
-        _wait_listening(audio_tcp)
+        self.video_relay = _RawRelay()
+        self.audio_relay = _RawRelay()
         self.bridge = _bridge_for(self.account_file)
         self.bridge.attach(self.channel, self._event)
-        self.bridge.send(f"open {self.channel} {self.dev_id} {tcp_port} {audio_tcp}")
-        self.url = f"udp://127.0.0.1:{udp_port}"
-        self.audio_url = f"udp://127.0.0.1:{audio_udp}"
+        # Pedir pro SDK abrir várias câmeras quase ao mesmo tempo (mesma conta) faz
+        # algumas travarem sem nunca conectar — espaça os comandos "open" de verdade.
+        _throttle_cloud_open(self.bridge, f"open {self.channel} {self.dev_id} "
+                             f"{self.video_relay.bridge_port} {self.audio_relay.bridge_port}")
+        self.url = f"tcp://127.0.0.1:{self.video_relay.player_port}"
+        self.audio_url = f"tcp://127.0.0.1:{self.audio_relay.player_port}"
         return self.url
 
     def _event(self, event: str):
@@ -271,21 +366,7 @@ class RemoteStream:
             self.bridge.send(f"close {self.channel}")
             self.bridge.detach(self.channel)
             self.bridge = None
-        for proc in (self.ffmpeg, self.audio_ffmpeg):
-            if proc and proc.poll() is None:
-                proc.kill()
-        self.ffmpeg = self.audio_ffmpeg = None
-
-
-def _wait_listening(port: int, timeout: float = 3) -> None:
-    """Espera o ffmpeg abrir a porta TCP, para a ponte não conectar antes dele."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with open("/proc/net/tcp") as f:
-                if any(line.split()[1].endswith(f":{port:04X}") and line.split()[3] == "0A"
-                       for line in f.readlines()[1:]):
-                    return
-        except OSError:
-            return
-        time.sleep(0.05)
+        for relay in (self.video_relay, self.audio_relay):
+            if relay:
+                relay.stop()
+        self.video_relay = self.audio_relay = None
