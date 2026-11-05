@@ -910,19 +910,24 @@ class MainWindow(QMainWindow):
         self.message.setText(text)
         QTimer.singleShot(3000, lambda: self.message.text() == text and self.message.setText(""))
 
-    CLOUD_NUDGE_SPACING = 0.6  # segundos; mesmo ritmo usado ao reproduzir predefinições pela nuvem
+    CLOUD_NUDGE_SPACING = 0.4  # segundos entre nudges pela nuvem (só isso controla a "velocidade" lá)
+    HOLD_SECONDS = 2.5  # duração de cada ContinuousMove ao SEGURAR na rede local (clique avulso usa STEP_SECONDS)
 
     def ptz_move(self, direction: str, is_repeat: bool = False):
         """`is_repeat`: disparo automático de "segurar o botão" (DPad.moved) — nesse caso,
         um comando rejeitado (câmera ainda ocupada com o anterior) é normal e fica em
-        silêncio; só um clique avulso rejeitado mostra aviso."""
+        silêncio (só um clique avulso rejeitado mostra aviso), e o movimento usa uma
+        duração maior (HOLD_SECONDS): a câmera fica parada ~0.5s entre comandos aceitos
+        de qualquer duração, então comandos mais longos reduzem a fração desse tempo
+        parado e a câmera parece mais rápida enquanto o botão fica pressionado."""
         ch = self.selected
         if ch and ch.remote:
             dev_id = ch.device["devId"]
             now = time.monotonic()
             # a nuvem não tem trava de "ocupado" própria (ver PtzController pra rede local);
             # sem isso, segurar o botão inundaria a ponte de comandos mais rápido do que a
-            # câmera aceita.
+            # câmera aceita. Aqui não há duração por comando (cada nudge já é de tamanho
+            # fixo), só a frequência controla a velocidade percebida.
             if now - self._cloud_ptz_last.get(dev_id, 0.0) < self.CLOUD_NUDGE_SPACING:
                 return
             if not ch.remote.ptz(direction):
@@ -941,18 +946,19 @@ class MainWindow(QMainWindow):
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
         name = ch.device["remarkName"]
         dev_id = ch.device["devId"]
+        seconds = self.HOLD_SECONDS if is_repeat else ptz.STEP_SECONDS
 
         def on_result(ok):
             if ok:
                 dx, dy = ptz.DIRECTIONS[direction]
-                # STEP_SECONDS=1, então 1 clique local também vale "1 unidade" — a mesma
-                # escala usada pela nuvem (ver _update_ptz_position mais abaixo).
+                # unidade = segundos de movimento; com STEP_SECONDS=1 um clique avulso
+                # também vale "1 unidade", a mesma escala usada pela nuvem acima.
                 _dispatcher.invoke.emit(
-                    lambda _: self._update_ptz_position(dev_id, dx * ptz.STEP_SECONDS, dy * ptz.STEP_SECONDS), None)
+                    lambda _: self._update_ptz_position(dev_id, dx * seconds, dy * seconds), None)
             else:
                 _dispatcher.invoke.emit(lambda _: self._flash(f"PTZ falhou em {name}"), None)
 
-        if not ctrl.move(direction, on_result) and not is_repeat:
+        if not ctrl.move(direction, on_result, seconds=seconds) and not is_repeat:
             self._flash("Aguarde o movimento anterior terminar.")
 
     # ---- predefinições de PTZ ----
