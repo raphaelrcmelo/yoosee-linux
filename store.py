@@ -113,9 +113,16 @@ def save_camera(dev_id: str, camera: LanCamera | None) -> None:
 # funciona; GetNodes/Stop/GetStatus derrubam a conexão neste firmware — ver
 # ARQUITETURA.md). Por isso a posição é um modelo aproximado, só deste app:
 # um acumulado de pan/tilt em "unidades de movimento" (segundos de ContinuousMove
-# na rede local; nº de comandos na nuvem). Uma predefinição guarda esse acumulado
-# no momento de salvar; "ir para" calcula a diferença e manda os movimentos
-# necessários. Pode desalinhar se a câmera for movida por outro cliente (o app
+# na rede local; nº de comandos na nuvem) — por isso a posição RASTREADA
+# (`get/set_ptz_position`) é guardada por `conn_key` ("<devId>:lan"/"<devId>:cloud"),
+# já que as unidades não se misturam.
+#
+# Já as PREDEFINIÇÕES (o que o usuário salva de propósito) ficam por câmera, não
+# por tipo de conexão: cada slot guarda as duas variantes que existirem ("lan" e/ou
+# "cloud"). Assim o botão 1 continua "preenchido" e com o mesmo número não importa
+# se a câmera está acessível pela rede local ou caiu pra nuvem naquele momento —
+# só a variante que não bate com a conexão atual fica indisponível até salvar de
+# novo com ela. Pode desalinhar se a câmera for movida por outro cliente (o app
 # do celular, por ex.) — nesse caso, basta salvar a predefinição de novo.
 
 def _load_ptz_state() -> dict:
@@ -130,34 +137,34 @@ def _save_ptz_state(state: dict) -> None:
     _write_private(PTZ_FILE, json.dumps(state, indent=2))
 
 
-def get_ptz_position(dev_id: str) -> tuple[float, float]:
-    entry = _load_ptz_state().get(dev_id, {})
+def get_ptz_position(conn_key: str) -> tuple[float, float]:
+    entry = _load_ptz_state().get(conn_key, {})
     return entry.get("pan", 0.0), entry.get("tilt", 0.0)
 
 
-def set_ptz_position(dev_id: str, pan: float, tilt: float) -> None:
+def set_ptz_position(conn_key: str, pan: float, tilt: float) -> None:
     state = _load_ptz_state()
-    entry = state.setdefault(dev_id, {})
+    entry = state.setdefault(conn_key, {})
     entry["pan"], entry["tilt"] = pan, tilt
     _save_ptz_state(state)
 
 
-def get_ptz_presets(dev_id: str) -> dict[str, tuple[float, float]]:
-    """slot ("1".."4") -> (pan, tilt); só os slots com predefinição salva."""
-    entry = _load_ptz_state().get(dev_id, {})
-    return {slot: tuple(pos) for slot, pos in entry.get("presets", {}).items()}
+def get_ptz_presets(dev_id: str) -> dict[str, dict[str, tuple[float, float]]]:
+    """slot ("1".."4") -> {"lan": (pan,tilt), "cloud": (pan,tilt)} (só as variantes salvas)."""
+    entry = _load_ptz_state().get(f"{dev_id}:presets", {})
+    return {slot: {conn: tuple(pos) for conn, pos in variants.items()} for slot, variants in entry.items()}
 
 
-def save_ptz_preset(dev_id: str, slot: str, pan: float, tilt: float) -> None:
+def save_ptz_preset(dev_id: str, slot: str, conn_type: str, pan: float, tilt: float) -> None:
     state = _load_ptz_state()
-    entry = state.setdefault(dev_id, {})
-    entry.setdefault("presets", {})[slot] = [pan, tilt]
+    entry = state.setdefault(f"{dev_id}:presets", {})
+    entry.setdefault(slot, {})[conn_type] = [pan, tilt]
     _save_ptz_state(state)
 
 
 def delete_ptz_preset(dev_id: str, slot: str) -> None:
+    """Apaga o slot inteiro (as duas variantes, se existirem)."""
     state = _load_ptz_state()
-    entry = state.get(dev_id)
-    if entry and "presets" in entry:
-        entry["presets"].pop(slot, None)
+    key = f"{dev_id}:presets"
+    if key in state and state[key].pop(slot, None) is not None:
         _save_ptz_state(state)

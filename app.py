@@ -34,35 +34,55 @@ from yoosee_api import YooseeClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-ACCENT = "#2f7bf6"
+# Paleta quente (mesma identidade do ícone do app: laranja -> rosa/vermelho),
+# em vez do cinza/azul neutro de antes.
+ACCENT = "#ff8a3d"       # laranja — ações principais, seleção, destaque
+ACCENT_2 = "#e8455f"     # rosa/vermelho — segundo tom da identidade, usado com moderação
+WARN = "#e8b33d"         # âmbar — "salvo, mas não para esta conexão"
+BG = "#201d1c"           # fundo quente (não cinza puro)
+BG_PANEL = "#2a2522"
+BG_RAISED = "#352e2a"
+BG_RAISED_HOVER = "#443a35"
+BORDER = "#453c37"
+TEXT = "#efe6e0"
+TEXT_MUTED = "#a89a92"
 STYLE = f"""
-QWidget {{ background: #2b2d31; color: #e3e3e3; font-size: 13px; }}
-#topbar, #bottombar {{ background: #1f2023; }}
-#bottombar {{ border-radius: 6px; }}
-#sidebar {{ background: #232428; }}
-#sidebarHeader {{ background: #3a3c42; padding: 8px; font-weight: bold; }}
-#appTitle {{ font-size: 22px; font-weight: bold; }}
-QListWidget {{ background: #232428; border: none; }}
-QListWidget::item {{ padding: 10px 8px; border-bottom: 1px solid #2f3136; }}
-QListWidget::item:selected {{ background: #34363c; color: white; }}
-#channel {{ background: black; border: 1px solid #2b2d31; }}
-#channel[selected="true"] {{ border: 1px solid {ACCENT}; }}
-#channelHeader {{ background: #1f2023; }}
+QWidget {{ background: {BG}; color: {TEXT}; font-size: 13px; }}
+#topbar {{ background: {BG_PANEL}; border-bottom: 1px solid {BORDER}; }}
+#bottombar {{ background: {BG_PANEL}; border-radius: 10px; border: 1px solid {BORDER}; }}
+#sidebar {{ background: {BG_PANEL}; border-right: 1px solid {BORDER}; }}
+#sidebarHeader {{ background: transparent; padding: 10px 4px 6px 4px; font-weight: 600;
+                  color: {TEXT_MUTED}; letter-spacing: 1px; text-transform: uppercase; font-size: 11px; }}
+#appTitle {{ font-size: 22px; font-weight: 800; color: {ACCENT}; }}
+QListWidget {{ background: transparent; border: none; outline: none; }}
+QListWidget::item {{ padding: 10px 10px; margin: 2px 6px; border-radius: 8px; }}
+QListWidget::item:hover {{ background: {BG_RAISED}; }}
+QListWidget::item:selected {{ background: {ACCENT}; color: #1a1413; }}
+#channel {{ background: black; border: 2px solid {BG_PANEL}; border-radius: 6px; }}
+#channel[selected="true"] {{ border: 2px solid {ACCENT}; }}
+#channelHeader {{ background: rgba(32,29,28,0.85); border-top-left-radius: 4px; border-top-right-radius: 4px; }}
 #channelHeader QLabel {{ background: transparent; font-size: 12px; }}
-#placeholder {{ background: black; color: #d0d0d0; }}
-QToolButton, QPushButton {{ background: #3a3c42; border: none; border-radius: 4px; padding: 6px 10px; }}
-QToolButton:hover, QPushButton:hover {{ background: #4a4d55; }}
-QToolButton:pressed, QPushButton:pressed {{ background: {ACCENT}; }}
-#dpad {{ background: #3a3c42; border-radius: 40px; }}
-#dpad QToolButton {{ background: transparent; font-size: 14px; padding: 2px; }}
-#dpad QToolButton:hover {{ color: {ACCENT}; }}
-#presetBtn {{ background: #2b2d31; border: 1px solid #3a3c42; border-radius: 4px; font-size: 11px; }}
-#presetBtn[filled="true"] {{ border-color: {ACCENT}; color: {ACCENT}; font-weight: bold; }}
-#presetBtn:disabled {{ color: #5a5c62; border-color: #333438; }}
-#closeBtn {{ background: transparent; padding: 0 4px; }}
-QLineEdit, QComboBox {{ background: #1f2023; border: 1px solid #3a3c42; border-radius: 4px; padding: 6px; }}
-QMenu {{ background: #2b2d31; border: 1px solid #3a3c42; }}
-QMenu::item:selected {{ background: {ACCENT}; }}
+#placeholder {{ background: #15100f; color: {TEXT_MUTED}; }}
+QToolButton, QPushButton {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 8px;
+                            padding: 7px 12px; color: {TEXT}; }}
+QToolButton:hover, QPushButton:hover {{ background: {BG_RAISED_HOVER}; border-color: {ACCENT}; }}
+QToolButton:pressed, QPushButton:pressed {{ background: {ACCENT}; color: #1a1413; border-color: {ACCENT}; }}
+#dpad {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 40px; }}
+#dpad QToolButton {{ background: transparent; border: none; font-size: 15px; padding: 2px; border-radius: 16px; }}
+#dpad QToolButton:hover {{ background: rgba(255,138,61,0.18); color: {ACCENT}; }}
+#dpad QToolButton:pressed {{ background: {ACCENT}; color: #1a1413; }}
+#presetBtn {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 6px;
+              font-size: 11px; font-weight: 600; color: {TEXT_MUTED}; }}
+#presetBtn[preset="here"] {{ border: 1.5px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.12); }}
+#presetBtn[preset="other"] {{ border: 1.5px dashed {WARN}; color: {WARN}; }}
+#presetBtn:disabled {{ color: #5a504a; border-color: #352e2b; background: {BG_PANEL}; }}
+#closeBtn {{ background: transparent; border: none; padding: 0 4px; color: {TEXT_MUTED}; }}
+#closeBtn:hover {{ color: {ACCENT_2}; background: transparent; }}
+QLineEdit, QComboBox {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 8px; padding: 7px 10px; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT}; }}
+QMenu {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 8px; padding: 4px; }}
+QMenu::item {{ padding: 7px 18px; border-radius: 6px; }}
+QMenu::item:selected {{ background: {ACCENT}; color: #1a1413; }}
 """
 
 
@@ -840,10 +860,18 @@ class MainWindow(QMainWindow):
     def _refresh_preset_buttons(self):
         ch = self.selected
         dev = ch.device if ch else None
-        saved = store.get_ptz_presets(self._ptz_key(ch)) if dev else {}
+        saved = store.get_ptz_presets(dev["devId"]) if dev else {}
+        conn = self._conn_type(ch) if dev else None
         for slot, btn in self.preset_btns.items():
             btn.setEnabled(dev is not None)
-            btn.setProperty("filled", "true" if slot in saved else "false")
+            variants = saved.get(slot)
+            if not variants:
+                state = "empty"
+            elif conn in variants:
+                state = "here"  # salva e vale pra conexão atual
+            else:
+                state = "other"  # salva, mas só pra rede local OU só pra nuvem (não a atual)
+            btn.setProperty("preset", state)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -896,8 +924,12 @@ class MainWindow(QMainWindow):
     CLOUD_PRESET_STEP_MS = 600
 
     @staticmethod
-    def _ptz_key(ch: "ChannelView") -> str:
-        return f"{ch.device['devId']}:{'cloud' if ch.remote else 'lan'}"
+    def _conn_type(ch: "ChannelView") -> str:
+        return "cloud" if ch.remote else "lan"
+
+    @classmethod
+    def _ptz_key(cls, ch: "ChannelView") -> str:
+        return f"{ch.device['devId']}:{cls._conn_type(ch)}"
 
     def _ptz_position(self, key: str) -> tuple[float, float]:
         if key not in self._ptz_cache:
@@ -927,12 +959,17 @@ class MainWindow(QMainWindow):
         if not ch or not ch.device:
             self._flash("Selecione um canal com câmera aberta.")
             return
-        key = self._ptz_key(ch)
-        presets = store.get_ptz_presets(key)
-        if slot not in presets:
+        conn = self._conn_type(ch)
+        variants = store.get_ptz_presets(ch.device["devId"]).get(slot)
+        if not variants:
             self._flash(f"Predefinição {slot} vazia — botão direito para salvar aqui.")
             return
-        target_pan, target_tilt = presets[slot]
+        if conn not in variants:
+            outra = "pela nuvem" if conn == "lan" else "pela rede local"
+            self._flash(f"Predefinição {slot} foi salva {outra} — salve de novo nesta conexão.")
+            return
+        key = self._ptz_key(ch)
+        target_pan, target_tilt = variants[conn]
         cur_pan, cur_tilt = self._ptz_position(key)
         axis_steps = self._preset_axis_steps(target_pan - cur_pan, target_tilt - cur_tilt)
         if not axis_steps:
@@ -993,9 +1030,8 @@ class MainWindow(QMainWindow):
         if not ch or not ch.device:
             self._flash("Selecione um canal com câmera aberta.")
             return
-        key = self._ptz_key(ch)
-        pan, tilt = self._ptz_position(key)
-        store.save_ptz_preset(key, slot, pan, tilt)
+        pan, tilt = self._ptz_position(self._ptz_key(ch))
+        store.save_ptz_preset(ch.device["devId"], slot, self._conn_type(ch), pan, tilt)
         self._flash(f"Predefinição {slot} salva ({ch.device['remarkName']}).")
         self._refresh_preset_buttons()
 
@@ -1003,7 +1039,7 @@ class MainWindow(QMainWindow):
         ch = self.selected
         if not ch or not ch.device:
             return
-        store.delete_ptz_preset(self._ptz_key(ch), slot)
+        store.delete_ptz_preset(ch.device["devId"], slot)
         self._flash(f"Predefinição {slot} apagada.")
         self._refresh_preset_buttons()
 
@@ -1011,7 +1047,7 @@ class MainWindow(QMainWindow):
         ch = self.selected
         menu = QMenu(self)
         menu.addAction(f"Salvar posição atual em {slot}", lambda: self.save_ptz_preset(slot))
-        if ch and ch.device and slot in store.get_ptz_presets(self._ptz_key(ch)):
+        if ch and ch.device and slot in store.get_ptz_presets(ch.device["devId"]):
             menu.addAction(f"Apagar predefinição {slot}", lambda: self.delete_ptz_preset(slot))
         menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
 

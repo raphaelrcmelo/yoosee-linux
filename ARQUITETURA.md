@@ -145,16 +145,28 @@ barra inferior) são um modelo **aproximado, rastreado só pelo app**:
 - `MainWindow` acumula uma posição virtual `(pan, tilt)` por câmera, em
   `_ptz_cache`/`store.set_ptz_position`. A unidade depende do caminho de conexão:
   **segundos de `ContinuousMove`** na rede local, **nº de comandos** pela nuvem
-  (lá não há controle de duração, só um nudge por clique). Por isso a chave de
-  rastreamento é `f"{devId}:{'cloud' if remoto else 'lan'}"` — a mesma câmera tem
-  posições e predefinições independentes para cada caminho.
+  (lá não há controle de duração, só um nudge por clique). Por isso o
+  **rastreamento** usa a chave `f"{devId}:{'cloud' if remoto else 'lan'}"`
+  (`_ptz_key`) — as unidades não podem se misturar.
+- As **predefinições**, ao contrário do rastreamento, ficam por câmera
+  (`store.get/save/delete_ptz_preset(devId, slot, ...)`), não por caminho de
+  conexão: cada slot guarda as variantes que existirem (`{"lan": [pan,tilt],
+  "cloud": [pan,tilt]}`). Isso porque a mesma câmera muda de caminho sozinha
+  (cai pra nuvem se a rede local ficar inacessível, ou volta — ver "Fallback
+  automático de rede" acima), e a primeira versão deste recurso guardava
+  predefinição por caminho, fazendo o botão "sumir" sempre que isso acontecia —
+  mesmo com o dado intacto no arquivo. Agora o botão mostra 3 estados:
+  `preset="here"` (salva e vale pra conexão atual), `preset="other"` (salva,
+  mas só pra LAN ou só pra nuvem — não a de agora) e `preset="empty"`.
 - Cada clique manual no D-pad (`ptz_move`) soma ao acumulado da câmera ativa.
-- "Salvar predefinição N" grava o acumulado atual nesse slot
-  (`store.save_ptz_preset`).
-- "Ir para N" calcula o delta entre o acumulado atual e o alvo salvo, e dispara os
-  movimentos necessários num eixo por vez: um `ContinuousMove` com a duração exata
-  (rede local, clampada em `MAX_PRESET_SECONDS`) ou uma sequência de nudges
-  espaçados em `CLOUD_PRESET_STEP_MS` (nuvem, clampada em `MAX_PRESET_NUDGES`).
+- "Salvar predefinição N" grava o acumulado atual nesse slot, na variante da
+  conexão de agora.
+- "Ir para N" usa a variante da conexão atual, se existir (senão avisa que
+  foi salva no outro caminho); calcula o delta entre o acumulado atual e o
+  alvo salvo, e dispara os movimentos necessários num eixo por vez: um
+  `ContinuousMove` com a duração exata (rede local, clampada em
+  `MAX_PRESET_SECONDS`) ou uma sequência de nudges espaçados em
+  `CLOUD_PRESET_STEP_MS` (nuvem, clampada em `MAX_PRESET_NUDGES`).
 
 Limitação conhecida: se outro cliente (ex.: app do celular) mover a câmera, o
 rastreamento deste app desalinha — basta salvar a predefinição de novo.
@@ -166,7 +178,8 @@ Tudo em `~/.config/yoosee-viewer/` com permissão 0600:
 - `accounts/<accessId>.json` — uma conta (email, accessId, accessToken).
 - `active_account` — qual conta está ativa.
 - `cameras.json` — `devId → {ip, user, password}` das câmeras configuradas na LAN.
-- `ptz_positions.json` — `"<devId>:<lan|cloud>" → {pan, tilt, presets: {"1".."4": [pan, tilt]}}`.
+- `ptz_positions.json` — rastreamento: `"<devId>:<lan|cloud>" → {pan, tilt}`;
+  predefinições: `"<devId>:presets" → {"1".."4": {"lan"?: [pan,tilt], "cloud"?: [pan,tilt]}}`.
 
 ## Runtime da nuvem
 
