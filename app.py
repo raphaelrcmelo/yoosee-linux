@@ -38,7 +38,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # em vez do cinza/azul neutro de antes.
 ACCENT = "#ff8a3d"       # laranja — ações principais, seleção, destaque
 ACCENT_2 = "#e8455f"     # rosa/vermelho — segundo tom da identidade, usado com moderação
-WARN = "#e8b33d"         # âmbar — "salvo, mas não para esta conexão"
 BG = "#201d1c"           # fundo quente (não cinza puro)
 BG_PANEL = "#2a2522"
 BG_RAISED = "#352e2a"
@@ -74,7 +73,6 @@ QToolButton:pressed, QPushButton:pressed {{ background: {ACCENT}; color: #1a1413
 #presetBtn {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 10px;
               font-size: 16px; font-weight: 700; color: {TEXT_MUTED}; }}
 #presetBtn[preset="here"] {{ border: 2px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.12); }}
-#presetBtn[preset="other"] {{ border: 2px dashed {WARN}; color: {WARN}; }}
 #bottomBtn {{ font-size: 15px; font-weight: 600; }}
 #presetBtn:disabled {{ color: #5a504a; border-color: #352e2b; background: {BG_PANEL}; }}
 #closeBtn {{ background: transparent; border: none; padding: 0 4px; color: {TEXT_MUTED}; }}
@@ -876,17 +874,9 @@ class MainWindow(QMainWindow):
         ch = self.selected
         dev = ch.device if ch else None
         saved = store.get_ptz_presets(dev["devId"]) if dev else {}
-        conn = self._conn_type(ch) if dev else None
         for slot, btn in self.preset_btns.items():
             btn.setEnabled(dev is not None)
-            variants = saved.get(slot)
-            if not variants:
-                state = "empty"
-            elif conn in variants:
-                state = "here"  # salva e vale pra conexão atual
-            else:
-                state = "other"  # salva, mas só pra rede local OU só pra nuvem (não a atual)
-            btn.setProperty("preset", state)
+            btn.setProperty("preset", "here" if slot in saved else "empty")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -903,7 +893,7 @@ class MainWindow(QMainWindow):
                 self._flash("A conexão pela nuvem ainda não está pronta.")
                 return
             dx, dy = ptz.DIRECTIONS[direction]
-            self._update_ptz_position(self._ptz_key(ch), dx, dy)  # unidade: 1 comando
+            self._update_ptz_position(ch.device["devId"], dx, dy)  # unidade: 1 comando
             return
         if not ch or not ch.lan:
             self._flash("Selecione um canal com câmera aberta.")
@@ -911,13 +901,15 @@ class MainWindow(QMainWindow):
         cam = ch.lan
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
         name = ch.device["remarkName"]
-        key = self._ptz_key(ch)
+        dev_id = ch.device["devId"]
 
         def on_result(ok):
             if ok:
                 dx, dy = ptz.DIRECTIONS[direction]
+                # STEP_SECONDS=1, então 1 clique local também vale "1 unidade" — a mesma
+                # escala usada pela nuvem (ver _update_ptz_position mais abaixo).
                 _dispatcher.invoke.emit(
-                    lambda _: self._update_ptz_position(key, dx * ptz.STEP_SECONDS, dy * ptz.STEP_SECONDS), None)
+                    lambda _: self._update_ptz_position(dev_id, dx * ptz.STEP_SECONDS, dy * ptz.STEP_SECONDS), None)
             else:
                 _dispatcher.invoke.emit(lambda _: self._flash(f"PTZ falhou em {name}"), None)
 
@@ -928,36 +920,29 @@ class MainWindow(QMainWindow):
     #
     # A câmera não tem posição absoluta nem presets confirmados (só
     # ContinuousMove funciona neste firmware — ver ARQUITETURA.md). A posição
-    # é aproximada, rastreada só por este app como um acumulado de pan/tilt:
-    # em segundos de movimento na rede local, em nº de comandos pela nuvem —
-    # por isso cada caminho de conexão tem seu próprio rastreamento (self._ptz_key).
-    # Se a câmera for movida por outro cliente (ex.: app do celular), o
+    # é aproximada, rastreada só por este app como um acumulado de pan/tilt,
+    # onde 1 clique manual (local ou pela nuvem) vale 1 unidade — os dois
+    # acionam o mesmo motor físico, então tratamos como equivalentes; isso faz
+    # uma predefinição salva num caminho funcionar pelo outro também. Se a
+    # câmera for movida por outro cliente (ex.: app do celular), o
     # rastreamento desalinha; basta salvar a predefinição de novo.
 
     MAX_PRESET_SECONDS = 8.0
     MAX_PRESET_NUDGES = 20
     CLOUD_PRESET_STEP_MS = 600
 
-    @staticmethod
-    def _conn_type(ch: "ChannelView") -> str:
-        return "cloud" if ch.remote else "lan"
+    def _ptz_position(self, dev_id: str) -> tuple[float, float]:
+        if dev_id not in self._ptz_cache:
+            self._ptz_cache[dev_id] = store.get_ptz_position(dev_id)
+        return self._ptz_cache[dev_id]
 
-    @classmethod
-    def _ptz_key(cls, ch: "ChannelView") -> str:
-        return f"{ch.device['devId']}:{cls._conn_type(ch)}"
+    def _set_ptz_position(self, dev_id: str, pan: float, tilt: float):
+        self._ptz_cache[dev_id] = (pan, tilt)
+        store.set_ptz_position(dev_id, pan, tilt)
 
-    def _ptz_position(self, key: str) -> tuple[float, float]:
-        if key not in self._ptz_cache:
-            self._ptz_cache[key] = store.get_ptz_position(key)
-        return self._ptz_cache[key]
-
-    def _set_ptz_position(self, key: str, pan: float, tilt: float):
-        self._ptz_cache[key] = (pan, tilt)
-        store.set_ptz_position(key, pan, tilt)
-
-    def _update_ptz_position(self, key: str, dpan: float, dtilt: float):
-        pan, tilt = self._ptz_position(key)
-        self._set_ptz_position(key, pan + dpan, tilt + dtilt)
+    def _update_ptz_position(self, dev_id: str, dpan: float, dtilt: float):
+        pan, tilt = self._ptz_position(dev_id)
+        self._set_ptz_position(dev_id, pan + dpan, tilt + dtilt)
 
     @staticmethod
     def _preset_axis_steps(dpan: float, dtilt: float) -> list[tuple[str, float]]:
@@ -974,18 +959,13 @@ class MainWindow(QMainWindow):
         if not ch or not ch.device:
             self._flash("Selecione um canal com câmera aberta.")
             return
-        conn = self._conn_type(ch)
-        variants = store.get_ptz_presets(ch.device["devId"]).get(slot)
-        if not variants:
+        dev_id = ch.device["devId"]
+        target = store.get_ptz_presets(dev_id).get(slot)
+        if not target:
             self._flash(f"Predefinição {slot} vazia — botão direito para salvar aqui.")
             return
-        if conn not in variants:
-            outra = "pela nuvem" if conn == "lan" else "pela rede local"
-            self._flash(f"Predefinição {slot} foi salva {outra} — salve de novo nesta conexão.")
-            return
-        key = self._ptz_key(ch)
-        target_pan, target_tilt = variants[conn]
-        cur_pan, cur_tilt = self._ptz_position(key)
+        target_pan, target_tilt = target
+        cur_pan, cur_tilt = self._ptz_position(dev_id)
         axis_steps = self._preset_axis_steps(target_pan - cur_pan, target_tilt - cur_tilt)
         if not axis_steps:
             self._flash(f"Já está na predefinição {slot}.")
@@ -994,20 +974,20 @@ class MainWindow(QMainWindow):
         self._flash(f"Movendo para a predefinição {slot}…")
         if ch.remote:
             steps = [(d, min(round(m), self.MAX_PRESET_NUDGES)) for d, m in axis_steps]
-            self._goto_preset_cloud(ch.remote, key, steps, target_pan, target_tilt, name)
+            self._goto_preset_cloud(ch.remote, dev_id, steps, target_pan, target_tilt, name)
         elif ch.lan:
             steps = [(d, min(m, self.MAX_PRESET_SECONDS)) for d, m in axis_steps]
-            self._goto_preset_lan(ch, key, steps, target_pan, target_tilt, name)
+            self._goto_preset_lan(ch, dev_id, steps, target_pan, target_tilt, name)
         else:
             self._flash("Câmera sem conexão ativa.")
 
-    def _goto_preset_lan(self, ch, key, steps, target_pan, target_tilt, name):
+    def _goto_preset_lan(self, ch, dev_id, steps, target_pan, target_tilt, name):
         cam = ch.lan
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
 
         def run_step(i):
             if i >= len(steps):
-                self._set_ptz_position(key, target_pan, target_tilt)
+                self._set_ptz_position(dev_id, target_pan, target_tilt)
                 self._flash(f"Predefinição aplicada em {name}.")
                 return
             direction, seconds = steps[i]
@@ -1025,12 +1005,12 @@ class MainWindow(QMainWindow):
 
         run_step(0)
 
-    def _goto_preset_cloud(self, stream, key, steps, target_pan, target_tilt, name):
+    def _goto_preset_cloud(self, stream, dev_id, steps, target_pan, target_tilt, name):
         queue = [direction for direction, count in steps for _ in range(int(count))]
 
         def run_step(i):
             if i >= len(queue):
-                self._set_ptz_position(key, target_pan, target_tilt)
+                self._set_ptz_position(dev_id, target_pan, target_tilt)
                 self._flash(f"Predefinição aplicada em {name}.")
                 return
             if not stream.ptz(queue[i]):
@@ -1045,8 +1025,9 @@ class MainWindow(QMainWindow):
         if not ch or not ch.device:
             self._flash("Selecione um canal com câmera aberta.")
             return
-        pan, tilt = self._ptz_position(self._ptz_key(ch))
-        store.save_ptz_preset(ch.device["devId"], slot, self._conn_type(ch), pan, tilt)
+        dev_id = ch.device["devId"]
+        pan, tilt = self._ptz_position(dev_id)
+        store.save_ptz_preset(dev_id, slot, pan, tilt)
         self._flash(f"Predefinição {slot} salva ({ch.device['remarkName']}).")
         self._refresh_preset_buttons()
 

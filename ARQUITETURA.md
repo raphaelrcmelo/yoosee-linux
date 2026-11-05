@@ -142,34 +142,33 @@ Este firmware não confirma suporte a posição absoluta nem a presets de hardwa
 `ContinuousMove` funciona). Por isso as predefinições (4 por câmera, botões 1–4 na
 barra inferior) são um modelo **aproximado, rastreado só pelo app**:
 
-- `MainWindow` acumula uma posição virtual `(pan, tilt)` por câmera, em
-  `_ptz_cache`/`store.set_ptz_position`. A unidade depende do caminho de conexão:
-  **segundos de `ContinuousMove`** na rede local, **nº de comandos** pela nuvem
-  (lá não há controle de duração, só um nudge por clique). Por isso o
-  **rastreamento** usa a chave `f"{devId}:{'cloud' if remoto else 'lan'}"`
-  (`_ptz_key`) — as unidades não podem se misturar.
-- As **predefinições**, ao contrário do rastreamento, ficam por câmera
-  (`store.get/save/delete_ptz_preset(devId, slot, ...)`), não por caminho de
-  conexão: cada slot guarda as variantes que existirem (`{"lan": [pan,tilt],
-  "cloud": [pan,tilt]}`). Isso porque a mesma câmera muda de caminho sozinha
-  (cai pra nuvem se a rede local ficar inacessível, ou volta — ver "Fallback
-  automático de rede" acima), e a primeira versão deste recurso guardava
-  predefinição por caminho, fazendo o botão "sumir" sempre que isso acontecia —
-  mesmo com o dado intacto no arquivo. Agora o botão mostra 3 estados:
-  `preset="here"` (salva e vale pra conexão atual), `preset="other"` (salva,
-  mas só pra LAN ou só pra nuvem — não a de agora) e `preset="empty"`.
+- `MainWindow` acumula uma posição virtual `(pan, tilt)` **por câmera**
+  (`_ptz_cache`/`store.get_ptz_position`/`store.set_ptz_position`, chave =
+  `devId`), onde **1 clique manual = 1 unidade**, não importa se o clique foi
+  um `ContinuousMove` (rede local) ou um comando da nuvem — os dois acionam o
+  mesmo motor físico da câmera, então são tratados como equivalentes. Por
+  `STEP_SECONDS` valer 1, a conta já dá certo sem fator de conversão: 1 s de
+  movimento local ≈ 1 nudge pela nuvem. Isso faz uma predefinição salva pela
+  rede local funcionar pela nuvem e vice-versa — a primeira versão deste
+  recurso guardava posição e predefinição por caminho de conexão (separado
+  para "lan"/"cloud"), e a mesma câmera trocando de caminho sozinha (ver
+  "Fallback automático de rede" acima) fazia o botão "sumir" mesmo com o dado
+  intacto no arquivo.
 - Cada clique manual no D-pad (`ptz_move`) soma ao acumulado da câmera ativa.
-- "Salvar predefinição N" grava o acumulado atual nesse slot, na variante da
-  conexão de agora.
-- "Ir para N" usa a variante da conexão atual, se existir (senão avisa que
-  foi salva no outro caminho); calcula o delta entre o acumulado atual e o
-  alvo salvo, e dispara os movimentos necessários num eixo por vez: um
-  `ContinuousMove` com a duração exata (rede local, clampada em
-  `MAX_PRESET_SECONDS`) ou uma sequência de nudges espaçados em
-  `CLOUD_PRESET_STEP_MS` (nuvem, clampada em `MAX_PRESET_NUDGES`).
+- "Salvar predefinição N" grava o acumulado atual nesse slot
+  (`store.save_ptz_preset(devId, slot, pan, tilt)`).
+- "Ir para N" calcula o delta entre o acumulado atual e o alvo salvo, e
+  dispara os movimentos necessários num eixo por vez: um `ContinuousMove` com
+  a duração exata (rede local, clampada em `MAX_PRESET_SECONDS`) ou uma
+  sequência de nudges espaçados em `CLOUD_PRESET_STEP_MS` (nuvem, clampada em
+  `MAX_PRESET_NUDGES`) — qualquer um dos dois, não importa em qual caminho a
+  predefinição foi originalmente salva.
 
 Limitação conhecida: se outro cliente (ex.: app do celular) mover a câmera, o
-rastreamento deste app desalinha — basta salvar a predefinição de novo.
+rastreamento deste app desalinha — basta salvar a predefinição de novo. A
+equivalência "1 clique = 1 unidade" entre os dois caminhos também é uma
+aproximação (não há como medir o ângulo real que cada um move fisicamente);
+funciona bem na prática, mas pode acumular um pequeno desvio com o tempo.
 
 ## Persistência
 
@@ -178,8 +177,8 @@ Tudo em `~/.config/yoosee-viewer/` com permissão 0600:
 - `accounts/<accessId>.json` — uma conta (email, accessId, accessToken).
 - `active_account` — qual conta está ativa.
 - `cameras.json` — `devId → {ip, user, password}` das câmeras configuradas na LAN.
-- `ptz_positions.json` — rastreamento: `"<devId>:<lan|cloud>" → {pan, tilt}`;
-  predefinições: `"<devId>:presets" → {"1".."4": {"lan"?: [pan,tilt], "cloud"?: [pan,tilt]}}`.
+- `ptz_positions.json` — rastreamento: `"<devId>" → {pan, tilt}`; predefinições:
+  `"<devId>:presets" → {"1".."4": [pan, tilt]}`.
 
 ## Runtime da nuvem
 
