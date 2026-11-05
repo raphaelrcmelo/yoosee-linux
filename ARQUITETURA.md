@@ -45,15 +45,22 @@ Cada câmera abre por um de dois caminhos, decidido em runtime:
     servidor fecha a conexão sem responder.
   - Só `ContinuousMove` funciona. `Stop`/`RelativeMove` derrubam a conexão, então o
     movimento para sozinho pelo `<Timeout>`.
-  - Velocidade abaixo de 1.0 não move; usar ±1.0. Comandos sobrepostos são descartados.
+  - Velocidade abaixo de 1.0 não move; usar ±1.0.
+  - **Cada `ContinuousMove` é UM passo fixo do motor (~0,3 s de giro), qualquer que seja
+    o `<Timeout>`** — medido no vídeo (ffmpeg `scene_score` no RTSP, que só aceita
+    transporte UDP): Timeout de 1 s e de 3 s dão o mesmo passo. A câmera **enfileira**
+    comandos e executa ~1 passo a cada 0,7–0,8 s; mandando a cada 0,3 s ela continuou
+    girando ~6 s depois do último comando. Por isso `ptz.STEP_INTERVAL = 0.8`.
+  - O app oficial do Windows faz o mesmo: 1 clique = 1 comando (`{"type":2,"data":{"dir":N}}`),
+    só tem sinais `onPtz*Click`, sem `setAutoRepeat` nem "segurar".
 - **Acesso remoto nativo**: ONVIF/RTSP só alcançam a câmera na LAN; de fora, via VPN
   (ex.: WireGuard) para chegar ao IP da câmera.
 - **Segurar o botão do D-pad**: como não há `Stop` que funcione, "mover continuamente"
-  é aproximado por `DPad` reenviando o comando de movimento a cada 200ms enquanto o
-  botão fica pressionado; `MainWindow.ptz_move` só aceita um novo comando quando o
-  anterior já tem chance de ter sido aceito pela câmera (trava de `PtzController` na
-  rede local, `CLOUD_NUDGE_SPACING` pela nuvem) — tentativas de repetição rejeitadas
-  ficam em silêncio (`is_repeat=True`), só um clique avulso rejeitado mostra aviso.
+  é aproximado por `DPad` tentando um passo a cada 100ms enquanto o botão fica
+  pressionado; `MainWindow.ptz_move` só aceita um passo a cada `ptz.STEP_INTERVAL`
+  (trava de `PtzController` na rede local, `_cloud_ptz_last` pela nuvem — mesmo motor,
+  mesmo limite). Esse é o máximo que a câmera anda: mais rápido só enche a fila dela
+  e o movimento passa do ponto depois de soltar. Rejeições ficam em silêncio.
 
 ## Câmeras fora da rede (SDK oficial no Wine)
 
@@ -150,11 +157,9 @@ barra inferior) são um modelo **aproximado, rastreado só pelo app**:
 
 - `MainWindow` acumula uma posição virtual `(pan, tilt)` **por câmera**
   (`_ptz_cache`/`store.get_ptz_position`/`store.set_ptz_position`, chave =
-  `devId`), onde **1 clique manual = 1 unidade**, não importa se o clique foi
-  um `ContinuousMove` (rede local) ou um comando da nuvem — os dois acionam o
-  mesmo motor físico da câmera, então são tratados como equivalentes. Por
-  `STEP_SECONDS` valer 1, a conta já dá certo sem fator de conversão: 1 s de
-  movimento local ≈ 1 nudge pela nuvem. Isso faz uma predefinição salva pela
+  `devId`), onde **1 passo aceito = 1 unidade**, não importa se foi um
+  `ContinuousMove` (rede local) ou um comando da nuvem — os dois acionam o
+  mesmo passo do motor. Isso faz uma predefinição salva pela
   rede local funcionar pela nuvem e vice-versa — a primeira versão deste
   recurso guardava posição e predefinição por caminho de conexão (separado
   para "lan"/"cloud"), e a mesma câmera trocando de caminho sozinha (ver
@@ -164,11 +169,10 @@ barra inferior) são um modelo **aproximado, rastreado só pelo app**:
 - "Salvar predefinição N" grava o acumulado atual nesse slot
   (`store.save_ptz_preset(devId, slot, pan, tilt)`).
 - "Ir para N" calcula o delta entre o acumulado atual e o alvo salvo, e
-  dispara os movimentos necessários num eixo por vez: um `ContinuousMove` com
-  a duração exata (rede local, clampada em `MAX_PRESET_SECONDS`) ou uma
-  sequência de nudges espaçados em `CLOUD_PRESET_STEP_MS` (nuvem, clampada em
-  `MAX_PRESET_NUDGES`) — qualquer um dos dois, não importa em qual caminho a
-  predefinição foi originalmente salva.
+  manda N passos, um eixo por vez, espaçados em `ptz.STEP_INTERVAL` (até
+  `MAX_PRESET_STEPS` por eixo), pela rede local ou pela nuvem. Versões antigas
+  mandavam um único `ContinuousMove` com a duração total, o que na prática
+  virava **um passo só** — por isso as predefinições "não iam" pra posição.
 
 Limitação conhecida: se outro cliente (ex.: app do celular) mover a câmera, o
 rastreamento deste app desalinha — basta salvar a predefinição de novo. A

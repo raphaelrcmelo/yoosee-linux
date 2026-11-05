@@ -460,7 +460,7 @@ class DPad(QFrame):
     moved = Signal(str, bool)
     SIZE = 148
     BTN_SIZE = 46
-    REPEAT_MS = 200  # só uma tentativa; quem decide se aceita é o lado que já sabe o cooldown real
+    REPEAT_MS = 100  # só uma tentativa; quem decide se aceita é o lado que já sabe o cooldown real
 
     def __init__(self):
         super().__init__(objectName="dpad")
@@ -910,28 +910,20 @@ class MainWindow(QMainWindow):
         self.message.setText(text)
         QTimer.singleShot(3000, lambda: self.message.text() == text and self.message.setText(""))
 
-    CLOUD_NUDGE_SPACING = 0.3  # segundos entre nudges pela nuvem (só isso controla a "velocidade" lá)
-    HOLD_SECONDS = 0.5   # Timeout do ContinuousMove ao SEGURAR (clique avulso usa STEP_SECONDS)
-    HOLD_BUFFER = 0.15   # folga entre comandos ao segurar (clique avulso usa 0.5, mais conservador)
-
     def ptz_move(self, direction: str, is_repeat: bool = False):
-        """`is_repeat`: disparo automático de "segurar o botão" (DPad.moved) — nesse caso,
-        um comando rejeitado (câmera ainda ocupada com o anterior) é normal e fica em
-        silêncio (só um clique avulso rejeitado mostra aviso). A câmera parece só girar
-        por um tempo curto e fixo a cada comando, não importa o Timeout declarado — então
-        ao segurar, reenviamos com Timeout e intervalo bem menores (HOLD_SECONDS/
-        HOLD_BUFFER) em vez de um comando longo, pra ficar o mais perto possível de
-        contínuo. Se isso fizer a câmera ignorar comandos (muito próximos), aumente
-        HOLD_BUFFER."""
+        """Um passo do motor, igual a um clique no app oficial do Windows (lá não há
+        "segurar": cada clique manda um comando). Segurar o botão aqui só repete o
+        passo no ritmo máximo que a câmera executa (ptz.STEP_INTERVAL) — medido no
+        vídeo: mais rápido que isso ela enfileira e continua girando depois de soltar.
+        `is_repeat`: disparo automático do DPad; rejeição por ritmo é normal e fica
+        em silêncio. Posição: 1 passo aceito = 1 unidade, na rede local e na nuvem."""
         ch = self.selected
         if ch and ch.remote:
             dev_id = ch.device["devId"]
             now = time.monotonic()
-            # a nuvem não tem trava de "ocupado" própria (ver PtzController pra rede local);
-            # sem isso, segurar o botão inundaria a ponte de comandos mais rápido do que a
-            # câmera aceita. Aqui não há duração por comando (cada nudge já é de tamanho
-            # fixo), só a frequência controla a velocidade percebida.
-            if now - self._cloud_ptz_last.get(dev_id, 0.0) < self.CLOUD_NUDGE_SPACING:
+            # a nuvem não tem trava própria (a rede local usa PtzController); mesmo
+            # motor, mesmo limite de ritmo.
+            if now - self._cloud_ptz_last.get(dev_id, 0.0) < ptz.STEP_INTERVAL:
                 return
             if not ch.remote.ptz(direction):
                 if not is_repeat:
@@ -939,7 +931,7 @@ class MainWindow(QMainWindow):
                 return
             self._cloud_ptz_last[dev_id] = now
             dx, dy = ptz.DIRECTIONS[direction]
-            self._update_ptz_position(dev_id, dx, dy)  # unidade: 1 comando
+            self._update_ptz_position(dev_id, dx, dy)
             return
         if not ch or not ch.lan:
             if not is_repeat:
@@ -949,21 +941,17 @@ class MainWindow(QMainWindow):
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
         name = ch.device["remarkName"]
         dev_id = ch.device["devId"]
-        seconds = self.HOLD_SECONDS if is_repeat else ptz.STEP_SECONDS
-        buffer = self.HOLD_BUFFER if is_repeat else 0.5
 
         def on_result(ok):
             if ok:
                 dx, dy = ptz.DIRECTIONS[direction]
-                # unidade = segundos de movimento; com STEP_SECONDS=1 um clique avulso
-                # também vale "1 unidade", a mesma escala usada pela nuvem acima.
-                _dispatcher.invoke.emit(
-                    lambda _: self._update_ptz_position(dev_id, dx * seconds, dy * seconds), None)
+                _dispatcher.invoke.emit(lambda _: self._update_ptz_position(dev_id, dx, dy), None)
             else:
                 _dispatcher.invoke.emit(lambda _: self._flash(f"PTZ falhou em {name}"), None)
 
-        if not ctrl.move(direction, on_result, seconds=seconds, buffer=buffer) and not is_repeat:
-            self._flash("Aguarde o movimento anterior terminar.")
+        # clique avulso rejeitado: silencioso também — o passo anterior ainda está em
+        # andamento e dura menos de 1s, um aviso só atrapalharia cliques rápidos.
+        ctrl.move(direction, on_result)
 
     # ---- predefinições de PTZ ----
     #
@@ -976,9 +964,7 @@ class MainWindow(QMainWindow):
     # câmera for movida por outro cliente (ex.: app do celular), o
     # rastreamento desalinha; basta salvar a predefinição de novo.
 
-    MAX_PRESET_SECONDS = 8.0
-    MAX_PRESET_NUDGES = 20
-    CLOUD_PRESET_STEP_MS = 600
+    MAX_PRESET_STEPS = 80  # por eixo; ~1 min no ritmo da câmera
 
     def _ptz_position(self, dev_id: str) -> tuple[float, float]:
         if dev_id not in self._ptz_cache:
@@ -1021,41 +1007,45 @@ class MainWindow(QMainWindow):
             return
         name = ch.device["remarkName"]
         self._flash(f"Movendo para a predefinição {slot}…")
+        queue = [d for d, m in axis_steps for _ in range(min(round(m), self.MAX_PRESET_STEPS))]
+        if not queue:  # diferença < meio passo (sobra de versões antigas com frações)
+            self._set_ptz_position(dev_id, target_pan, target_tilt)
+            self._flash(f"Já está na predefinição {slot}.")
+            return
         if ch.remote:
-            steps = [(d, min(round(m), self.MAX_PRESET_NUDGES)) for d, m in axis_steps]
-            self._goto_preset_cloud(ch.remote, dev_id, steps, target_pan, target_tilt, name)
+            self._goto_preset_cloud(ch.remote, dev_id, queue, target_pan, target_tilt, name)
         elif ch.lan:
-            steps = [(d, min(m, self.MAX_PRESET_SECONDS)) for d, m in axis_steps]
-            self._goto_preset_lan(ch, dev_id, steps, target_pan, target_tilt, name)
+            self._goto_preset_lan(ch, dev_id, queue, target_pan, target_tilt, name)
         else:
             self._flash("Câmera sem conexão ativa.")
 
-    def _goto_preset_lan(self, ch, dev_id, steps, target_pan, target_tilt, name):
+    def _goto_preset_lan(self, ch, dev_id, queue, target_pan, target_tilt, name):
+        """Um passo por vez no ritmo da câmera — um comando longo não serve: ela dá um
+        passo só, qualquer que seja o Timeout."""
         cam = ch.lan
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
+        step_ms = int(ptz.STEP_INTERVAL * 1000) + 30
 
         def run_step(i):
-            if i >= len(steps):
+            if i >= len(queue):
                 self._set_ptz_position(dev_id, target_pan, target_tilt)
                 self._flash(f"Predefinição aplicada em {name}.")
                 return
-            direction, seconds = steps[i]
 
             def on_result(ok):
                 if not ok:
                     _dispatcher.invoke.emit(
                         lambda _: self._flash(f"PTZ falhou em {name} (predefinição incompleta)"), None)
-                    return
-                _dispatcher.invoke.emit(
-                    lambda _: QTimer.singleShot(int(seconds * 1000) + 300, lambda: run_step(i + 1)), None)
 
-            if not ctrl.move(direction, on_result, seconds=seconds):
-                self._flash("Aguarde o movimento anterior terminar.")
+            if not ctrl.move(queue[i], on_result):
+                QTimer.singleShot(100, lambda: run_step(i))  # passo manual em andamento
+                return
+            QTimer.singleShot(step_ms, lambda: run_step(i + 1))
 
         run_step(0)
 
-    def _goto_preset_cloud(self, stream, dev_id, steps, target_pan, target_tilt, name):
-        queue = [direction for direction, count in steps for _ in range(int(count))]
+    def _goto_preset_cloud(self, stream, dev_id, queue, target_pan, target_tilt, name):
+        step_ms = int(ptz.STEP_INTERVAL * 1000) + 30
 
         def run_step(i):
             if i >= len(queue):
@@ -1065,7 +1055,8 @@ class MainWindow(QMainWindow):
             if not stream.ptz(queue[i]):
                 self._flash(f"PTZ pela nuvem falhou em {name} (predefinição incompleta)")
                 return
-            QTimer.singleShot(self.CLOUD_PRESET_STEP_MS, lambda: run_step(i + 1))
+            self._cloud_ptz_last[dev_id] = time.monotonic()
+            QTimer.singleShot(step_ms, lambda: run_step(i + 1))
 
         run_step(0)
 
