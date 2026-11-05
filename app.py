@@ -14,7 +14,7 @@ from urllib.parse import quote
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 import urllib3
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
@@ -67,14 +67,15 @@ QToolButton, QPushButton {{ background: {BG_RAISED}; border: 1px solid {BORDER};
                             padding: 7px 12px; color: {TEXT}; }}
 QToolButton:hover, QPushButton:hover {{ background: {BG_RAISED_HOVER}; border-color: {ACCENT}; }}
 QToolButton:pressed, QPushButton:pressed {{ background: {ACCENT}; color: #1a1413; border-color: {ACCENT}; }}
-#dpad {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 40px; }}
-#dpad QToolButton {{ background: transparent; border: none; font-size: 15px; padding: 2px; border-radius: 16px; }}
+#dpad {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 74px; }}
+#dpad QToolButton {{ background: transparent; border: none; font-size: 22px; padding: 2px; border-radius: 23px; }}
 #dpad QToolButton:hover {{ background: rgba(255,138,61,0.18); color: {ACCENT}; }}
 #dpad QToolButton:pressed {{ background: {ACCENT}; color: #1a1413; }}
-#presetBtn {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 6px;
-              font-size: 11px; font-weight: 600; color: {TEXT_MUTED}; }}
-#presetBtn[preset="here"] {{ border: 1.5px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.12); }}
-#presetBtn[preset="other"] {{ border: 1.5px dashed {WARN}; color: {WARN}; }}
+#presetBtn {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 10px;
+              font-size: 16px; font-weight: 700; color: {TEXT_MUTED}; }}
+#presetBtn[preset="here"] {{ border: 2px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.12); }}
+#presetBtn[preset="other"] {{ border: 2px dashed {WARN}; color: {WARN}; }}
+#bottomBtn {{ font-size: 15px; font-weight: 600; }}
 #presetBtn:disabled {{ color: #5a504a; border-color: #352e2b; background: {BG_PANEL}; }}
 #closeBtn {{ background: transparent; border: none; padding: 0 4px; color: {TEXT_MUTED}; }}
 #closeBtn:hover {{ color: {ACCENT_2}; background: transparent; }}
@@ -455,18 +456,21 @@ class ChannelView(QFrame):
 
 class DPad(QFrame):
     moved = Signal(str)
+    SIZE = 148
+    BTN_SIZE = 46
 
     def __init__(self):
         super().__init__(objectName="dpad")
-        self.setFixedSize(80, 80)
+        self.setFixedSize(self.SIZE, self.SIZE)
         grid = QGridLayout(self)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setSpacing(0)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setSpacing(2)
         for direction, glyph, row, col, tip in (
             ("up", "▲", 0, 1, "Cima"), ("left", "◀", 1, 0, "Esquerda"),
             ("right", "▶", 1, 2, "Direita"), ("down", "▼", 2, 1, "Baixo"),
         ):
             btn = QToolButton(text=glyph)
+            btn.setFixedSize(self.BTN_SIZE, self.BTN_SIZE)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, d=direction: self.moved.emit(d))
             grid.addWidget(btn, row, col, Qt.AlignCenter)
@@ -565,13 +569,24 @@ class MainWindow(QMainWindow):
         v.addWidget(self.sidebar_status)
         return side
 
+    BOTTOMBAR_ICON = 26
+    BOTTOMBAR_BTN = 44
+
+    def _bottombar_btn(self, **kwargs) -> QToolButton:
+        """Botão padrão da barra inferior, no tamanho maior e com ícone grande."""
+        btn = QToolButton(objectName="bottomBtn", **kwargs)
+        btn.setIconSize(QSize(self.BOTTOMBAR_ICON, self.BOTTOMBAR_ICON))
+        btn.setMinimumSize(self.BOTTOMBAR_BTN, self.BOTTOMBAR_BTN)
+        return btn
+
     def _build_bottombar(self):
         bar = QWidget(objectName="bottombar")
         h = QHBoxLayout(bar)
-        h.setContentsMargins(10, 6, 10, 6)
+        h.setContentsMargins(14, 10, 14, 10)
+        h.setSpacing(12)
         st = self.style()
 
-        stop = QToolButton(icon=st.standardIcon(QStyle.SP_MediaStop))
+        stop = self._bottombar_btn(icon=st.standardIcon(QStyle.SP_MediaStop))
         stop.setToolTip("Parar canal selecionado")
         stop.clicked.connect(self.stop_selected)
         h.addWidget(stop)
@@ -583,13 +598,13 @@ class MainWindow(QMainWindow):
         self.preset_btns: dict[str, QToolButton] = {}
         presets = QWidget()
         pg = QGridLayout(presets)
-        pg.setContentsMargins(6, 0, 0, 0)
-        pg.setSpacing(2)
+        pg.setContentsMargins(10, 0, 0, 0)
+        pg.setSpacing(6)
         for i, slot in enumerate(store.PTZ_SLOTS):
             btn = QToolButton(text=slot, objectName="presetBtn")
             btn.setToolTip(f"Ir para a predefinição {slot}\n"
                             "Clique com o botão direito para salvar/apagar")
-            btn.setFixedSize(26, 26)
+            btn.setFixedSize(46, 46)
             btn.setEnabled(False)
             btn.clicked.connect(lambda _=False, s=slot: self.goto_ptz_preset(s))
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -598,7 +613,7 @@ class MainWindow(QMainWindow):
             pg.addWidget(btn, i // 2, i % 2)
         h.addWidget(presets)
 
-        shot = QToolButton(text="Foto")
+        shot = self._bottombar_btn(text="Foto")
         shot.setToolTip("Capturar imagem do canal selecionado")
         shot.clicked.connect(self.screenshot)
         h.addWidget(shot)
@@ -607,22 +622,22 @@ class MainWindow(QMainWindow):
         h.addWidget(self.message)
         h.addStretch()
 
-        self.mute_btn = QToolButton(icon=st.standardIcon(QStyle.SP_MediaVolumeMuted))
+        self.mute_btn = self._bottombar_btn(icon=st.standardIcon(QStyle.SP_MediaVolumeMuted))
         self.mute_btn.setToolTip("Som do canal selecionado")
         self.mute_btn.clicked.connect(self.toggle_mute)
         h.addWidget(self.mute_btn)
 
-        self.quality_btn = QToolButton(text="HD")
+        self.quality_btn = self._bottombar_btn(text="HD")
         self.quality_btn.setToolTip("Alternar HD/SD no canal selecionado")
         self.quality_btn.clicked.connect(self.toggle_quality)
         h.addWidget(self.quality_btn)
 
-        self.layout_btn = QToolButton(text="4")
+        self.layout_btn = self._bottombar_btn(text="4")
         self.layout_btn.setToolTip("Alternar grade 1 / 4 / 9")
         self.layout_btn.clicked.connect(self.cycle_layout)
         h.addWidget(self.layout_btn)
 
-        full = QToolButton(icon=QIcon.fromTheme("view-fullscreen", st.standardIcon(QStyle.SP_TitleBarMaxButton)))
+        full = self._bottombar_btn(icon=QIcon.fromTheme("view-fullscreen", st.standardIcon(QStyle.SP_TitleBarMaxButton)))
         full.setToolTip("Tela cheia")
         full.clicked.connect(lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
         h.addWidget(full)
