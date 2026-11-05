@@ -8,6 +8,8 @@ from settings import CONFIG_DIR, DEFAULT_RTSP_USER
 ACCOUNTS_DIR = os.path.join(CONFIG_DIR, "accounts")
 ACTIVE_FILE = os.path.join(CONFIG_DIR, "active_account")
 CAMERAS_FILE = os.path.join(CONFIG_DIR, "cameras.json")
+PTZ_FILE = os.path.join(CONFIG_DIR, "ptz_positions.json")
+PTZ_SLOTS = ("1", "2", "3", "4")
 
 
 @dataclass
@@ -103,3 +105,59 @@ def save_camera(dev_id: str, camera: LanCamera | None) -> None:
     else:
         cameras.pop(dev_id, None)
     _write_private(CAMERAS_FILE, json.dumps({d: asdict(c) for d, c in cameras.items()}, indent=2))
+
+
+# --- Predefinições de PTZ ---------------------------------------------------
+#
+# A câmera não expõe posição absoluta nem presets confirmados (só ContinuousMove
+# funciona; GetNodes/Stop/GetStatus derrubam a conexão neste firmware — ver
+# ARQUITETURA.md). Por isso a posição é um modelo aproximado, só deste app:
+# um acumulado de pan/tilt em "unidades de movimento" (segundos de ContinuousMove
+# na rede local; nº de comandos na nuvem). Uma predefinição guarda esse acumulado
+# no momento de salvar; "ir para" calcula a diferença e manda os movimentos
+# necessários. Pode desalinhar se a câmera for movida por outro cliente (o app
+# do celular, por ex.) — nesse caso, basta salvar a predefinição de novo.
+
+def _load_ptz_state() -> dict:
+    try:
+        with open(PTZ_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+
+def _save_ptz_state(state: dict) -> None:
+    _write_private(PTZ_FILE, json.dumps(state, indent=2))
+
+
+def get_ptz_position(dev_id: str) -> tuple[float, float]:
+    entry = _load_ptz_state().get(dev_id, {})
+    return entry.get("pan", 0.0), entry.get("tilt", 0.0)
+
+
+def set_ptz_position(dev_id: str, pan: float, tilt: float) -> None:
+    state = _load_ptz_state()
+    entry = state.setdefault(dev_id, {})
+    entry["pan"], entry["tilt"] = pan, tilt
+    _save_ptz_state(state)
+
+
+def get_ptz_presets(dev_id: str) -> dict[str, tuple[float, float]]:
+    """slot ("1".."4") -> (pan, tilt); só os slots com predefinição salva."""
+    entry = _load_ptz_state().get(dev_id, {})
+    return {slot: tuple(pos) for slot, pos in entry.get("presets", {}).items()}
+
+
+def save_ptz_preset(dev_id: str, slot: str, pan: float, tilt: float) -> None:
+    state = _load_ptz_state()
+    entry = state.setdefault(dev_id, {})
+    entry.setdefault("presets", {})[slot] = [pan, tilt]
+    _save_ptz_state(state)
+
+
+def delete_ptz_preset(dev_id: str, slot: str) -> None:
+    state = _load_ptz_state()
+    entry = state.get(dev_id)
+    if entry and "presets" in entry:
+        entry["presets"].pop(slot, None)
+        _save_ptz_state(state)

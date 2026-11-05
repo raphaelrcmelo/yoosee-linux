@@ -71,13 +71,13 @@ def soap_call(ip: str, user: str, password: str, service: str, body: str, timeou
     return received.decode(errors="replace")
 
 
-def continuous_move(ip: str, user: str, password: str, direction: str, seconds: int = STEP_SECONDS) -> bool:
+def continuous_move(ip: str, user: str, password: str, direction: str, seconds: float = STEP_SECONDS) -> bool:
     x, y = DIRECTIONS[direction]
     body = (
         '<ContinuousMove xmlns="http://www.onvif.org/ver20/ptz/wsdl">'
         f"<ProfileToken>{PROFILE_TOKEN}</ProfileToken>"
         f'<Velocity><tt:PanTilt x="{x}" y="{y}"/></Velocity>'
-        f"<Timeout>PT{seconds}S</Timeout></ContinuousMove>"
+        f"<Timeout>PT{seconds:g}S</Timeout></ContinuousMove>"
     )
     response = soap_call(ip, user, password, "ptz_service", body)
     return "ContinuousMoveResponse" in response
@@ -94,16 +94,16 @@ class PtzController:
         self._busy_until = 0.0
         self._lock = threading.Lock()
 
-    def move(self, direction: str, on_result=None) -> bool:
+    def move(self, direction: str, on_result=None, seconds: float = STEP_SECONDS) -> bool:
         with self._lock:
             now = time.monotonic()
             if now < self._busy_until:
                 return False
-            self._busy_until = now + STEP_SECONDS + 0.5
+            self._busy_until = now + seconds + 0.5
 
         def worker():
             try:
-                ok = continuous_move(self.ip, self.user, self.password, direction)
+                ok = continuous_move(self.ip, self.user, self.password, direction, seconds)
             except OSError:
                 ok = False
             if on_result is not None:

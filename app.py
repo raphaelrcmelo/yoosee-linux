@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 import lan
 import p2p
+import ptz
 import store
 from ptz import PtzController
 from settings import DEFAULT_RTSP_USER, SCREENSHOT_DIR, STREAMS
@@ -55,6 +56,9 @@ QToolButton:pressed, QPushButton:pressed {{ background: {ACCENT}; }}
 #dpad {{ background: #3a3c42; border-radius: 40px; }}
 #dpad QToolButton {{ background: transparent; font-size: 14px; padding: 2px; }}
 #dpad QToolButton:hover {{ color: {ACCENT}; }}
+#presetBtn {{ background: #2b2d31; border: 1px solid #3a3c42; border-radius: 4px; font-size: 11px; }}
+#presetBtn[filled="true"] {{ border-color: {ACCENT}; color: {ACCENT}; font-weight: bold; }}
+#presetBtn:disabled {{ color: #5a5c62; border-color: #333438; }}
 #closeBtn {{ background: transparent; padding: 0 4px; }}
 QLineEdit, QComboBox {{ background: #1f2023; border: 1px solid #3a3c42; border-radius: 4px; padding: 6px; }}
 QMenu {{ background: #2b2d31; border: 1px solid #3a3c42; }}
@@ -459,6 +463,7 @@ class MainWindow(QMainWindow):
         self.devices: list[dict] = []
         self.cameras = store.load_cameras()
         self.ptz: dict[str, PtzController] = {}
+        self._ptz_cache: dict[str, tuple[float, float]] = {}  # posição aproximada (pan, tilt)
         self.channels = [ChannelView(i) for i in range(max(self.LAYOUTS))]
         self._media_devices = QMediaDevices(self)
         self._media_devices.audioOutputsChanged.connect(self._follow_default_output)
@@ -548,12 +553,30 @@ class MainWindow(QMainWindow):
 
         stop = QToolButton(icon=st.standardIcon(QStyle.SP_MediaStop))
         stop.setToolTip("Parar canal selecionado")
-        stop.clicked.connect(lambda: self.selected and self.selected.stop())
+        stop.clicked.connect(self.stop_selected)
         h.addWidget(stop)
 
         self.dpad = DPad()
         self.dpad.moved.connect(self.ptz_move)
         h.addWidget(self.dpad)
+
+        self.preset_btns: dict[str, QToolButton] = {}
+        presets = QWidget()
+        pg = QGridLayout(presets)
+        pg.setContentsMargins(6, 0, 0, 0)
+        pg.setSpacing(2)
+        for i, slot in enumerate(store.PTZ_SLOTS):
+            btn = QToolButton(text=slot, objectName="presetBtn")
+            btn.setToolTip(f"Ir para a predefinição {slot}\n"
+                            "Clique com o botão direito para salvar/apagar")
+            btn.setFixedSize(26, 26)
+            btn.setEnabled(False)
+            btn.clicked.connect(lambda _=False, s=slot: self.goto_ptz_preset(s))
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.customContextMenuRequested.connect(lambda pos, s=slot, b=btn: self._preset_menu(s, b))
+            self.preset_btns[slot] = btn
+            pg.addWidget(btn, i // 2, i % 2)
+        h.addWidget(presets)
 
         shot = QToolButton(text="Foto")
         shot.setToolTip("Capturar imagem do canal selecionado")
@@ -784,6 +807,11 @@ class MainWindow(QMainWindow):
         self.focused = None if self.focused is ch else ch
         self.apply_layout()
 
+    def stop_selected(self):
+        if self.selected:
+            self.selected.stop()
+            self._refresh_preset_buttons()
+
     def select_channel(self, ch):
         if self.selected is not None:
             self.selected.set_selected(False)
@@ -792,6 +820,16 @@ class MainWindow(QMainWindow):
         self.quality_btn.setText("HD" if ch.effective_quality() == "main" else "SD")
         self.mute_btn.setIcon(self.style().standardIcon(
             QStyle.SP_MediaVolumeMuted if ch.is_muted() else QStyle.SP_MediaVolume))
+        self._refresh_preset_buttons()
+
+    def _refresh_preset_buttons(self):
+        dev = self.selected.device if self.selected else None
+        saved = store.get_ptz_presets(dev["devId"]) if dev else {}
+        for slot, btn in self.preset_btns.items():
+            btn.setEnabled(dev is not None)
+            btn.setProperty("filled", "true" if slot in saved else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     # ---- controles ----
 
@@ -804,6 +842,9 @@ class MainWindow(QMainWindow):
         if ch and ch.remote:
             if not ch.remote.ptz(direction):
                 self._flash("A conexão pela nuvem ainda não está pronta.")
+                return
+            dx, dy = ptz.DIRECTIONS[direction]
+            self._update_ptz_position(self._ptz_key(ch), dx, dy)  # unidade: 1 comando
             return
         if not ch or not ch.lan:
             self._flash("Selecione um canal com câmera aberta.")
@@ -811,13 +852,152 @@ class MainWindow(QMainWindow):
         cam = ch.lan
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
         name = ch.device["remarkName"]
+        key = self._ptz_key(ch)
 
         def on_result(ok):
-            if not ok:
+            if ok:
+                dx, dy = ptz.DIRECTIONS[direction]
+                _dispatcher.invoke.emit(
+                    lambda _: self._update_ptz_position(key, dx * ptz.STEP_SECONDS, dy * ptz.STEP_SECONDS), None)
+            else:
                 _dispatcher.invoke.emit(lambda _: self._flash(f"PTZ falhou em {name}"), None)
 
         if not ctrl.move(direction, on_result):
             self._flash("Aguarde o movimento anterior terminar.")
+
+    # ---- predefinições de PTZ ----
+    #
+    # A câmera não tem posição absoluta nem presets confirmados (só
+    # ContinuousMove funciona neste firmware — ver ARQUITETURA.md). A posição
+    # é aproximada, rastreada só por este app como um acumulado de pan/tilt:
+    # em segundos de movimento na rede local, em nº de comandos pela nuvem —
+    # por isso cada caminho de conexão tem seu próprio rastreamento (self._ptz_key).
+    # Se a câmera for movida por outro cliente (ex.: app do celular), o
+    # rastreamento desalinha; basta salvar a predefinição de novo.
+
+    MAX_PRESET_SECONDS = 8.0
+    MAX_PRESET_NUDGES = 20
+    CLOUD_PRESET_STEP_MS = 600
+
+    @staticmethod
+    def _ptz_key(ch: "ChannelView") -> str:
+        return f"{ch.device['devId']}:{'cloud' if ch.remote else 'lan'}"
+
+    def _ptz_position(self, key: str) -> tuple[float, float]:
+        if key not in self._ptz_cache:
+            self._ptz_cache[key] = store.get_ptz_position(key)
+        return self._ptz_cache[key]
+
+    def _set_ptz_position(self, key: str, pan: float, tilt: float):
+        self._ptz_cache[key] = (pan, tilt)
+        store.set_ptz_position(key, pan, tilt)
+
+    def _update_ptz_position(self, key: str, dpan: float, dtilt: float):
+        pan, tilt = self._ptz_position(key)
+        self._set_ptz_position(key, pan + dpan, tilt + dtilt)
+
+    @staticmethod
+    def _preset_axis_steps(dpan: float, dtilt: float) -> list[tuple[str, float]]:
+        """[(direção, |delta|)] dos eixos com diferença real entre a posição atual e a predefinição."""
+        steps = []
+        if abs(dpan) > 1e-6:
+            steps.append(("right" if dpan > 0 else "left", abs(dpan)))
+        if abs(dtilt) > 1e-6:
+            steps.append(("up" if dtilt > 0 else "down", abs(dtilt)))
+        return steps
+
+    def goto_ptz_preset(self, slot: str):
+        ch = self.selected
+        if not ch or not ch.device:
+            self._flash("Selecione um canal com câmera aberta.")
+            return
+        key = self._ptz_key(ch)
+        presets = store.get_ptz_presets(key)
+        if slot not in presets:
+            self._flash(f"Predefinição {slot} vazia — botão direito para salvar aqui.")
+            return
+        target_pan, target_tilt = presets[slot]
+        cur_pan, cur_tilt = self._ptz_position(key)
+        axis_steps = self._preset_axis_steps(target_pan - cur_pan, target_tilt - cur_tilt)
+        if not axis_steps:
+            self._flash(f"Já está na predefinição {slot}.")
+            return
+        name = ch.device["remarkName"]
+        self._flash(f"Movendo para a predefinição {slot}…")
+        if ch.remote:
+            steps = [(d, min(round(m), self.MAX_PRESET_NUDGES)) for d, m in axis_steps]
+            self._goto_preset_cloud(ch.remote, key, steps, target_pan, target_tilt, name)
+        elif ch.lan:
+            steps = [(d, min(m, self.MAX_PRESET_SECONDS)) for d, m in axis_steps]
+            self._goto_preset_lan(ch, key, steps, target_pan, target_tilt, name)
+        else:
+            self._flash("Câmera sem conexão ativa.")
+
+    def _goto_preset_lan(self, ch, key, steps, target_pan, target_tilt, name):
+        cam = ch.lan
+        ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
+
+        def run_step(i):
+            if i >= len(steps):
+                self._set_ptz_position(key, target_pan, target_tilt)
+                self._flash(f"Predefinição aplicada em {name}.")
+                return
+            direction, seconds = steps[i]
+
+            def on_result(ok):
+                if not ok:
+                    _dispatcher.invoke.emit(
+                        lambda _: self._flash(f"PTZ falhou em {name} (predefinição incompleta)"), None)
+                    return
+                _dispatcher.invoke.emit(
+                    lambda _: QTimer.singleShot(int(seconds * 1000) + 300, lambda: run_step(i + 1)), None)
+
+            if not ctrl.move(direction, on_result, seconds=seconds):
+                self._flash("Aguarde o movimento anterior terminar.")
+
+        run_step(0)
+
+    def _goto_preset_cloud(self, stream, key, steps, target_pan, target_tilt, name):
+        queue = [direction for direction, count in steps for _ in range(int(count))]
+
+        def run_step(i):
+            if i >= len(queue):
+                self._set_ptz_position(key, target_pan, target_tilt)
+                self._flash(f"Predefinição aplicada em {name}.")
+                return
+            if not stream.ptz(queue[i]):
+                self._flash(f"PTZ pela nuvem falhou em {name} (predefinição incompleta)")
+                return
+            QTimer.singleShot(self.CLOUD_PRESET_STEP_MS, lambda: run_step(i + 1))
+
+        run_step(0)
+
+    def save_ptz_preset(self, slot: str):
+        ch = self.selected
+        if not ch or not ch.device:
+            self._flash("Selecione um canal com câmera aberta.")
+            return
+        key = self._ptz_key(ch)
+        pan, tilt = self._ptz_position(key)
+        store.save_ptz_preset(key, slot, pan, tilt)
+        self._flash(f"Predefinição {slot} salva ({ch.device['remarkName']}).")
+        self._refresh_preset_buttons()
+
+    def delete_ptz_preset(self, slot: str):
+        ch = self.selected
+        if not ch or not ch.device:
+            return
+        store.delete_ptz_preset(self._ptz_key(ch), slot)
+        self._flash(f"Predefinição {slot} apagada.")
+        self._refresh_preset_buttons()
+
+    def _preset_menu(self, slot: str, btn: QToolButton):
+        ch = self.selected
+        menu = QMenu(self)
+        menu.addAction(f"Salvar posição atual em {slot}", lambda: self.save_ptz_preset(slot))
+        if ch and ch.device and slot in store.get_ptz_presets(self._ptz_key(ch)):
+            menu.addAction(f"Apagar predefinição {slot}", lambda: self.delete_ptz_preset(slot))
+        menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
 
     def screenshot(self):
         ch = self.selected

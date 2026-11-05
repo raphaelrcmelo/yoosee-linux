@@ -111,6 +111,30 @@ o fim dos processos.
 A lista lateral mostra onde cada câmera será aberta ("via VPN", "pela nuvem (fora da
 rede)", etc.), atualizada por um teste de alcance em segundo plano.
 
+## Predefinições de PTZ
+
+Este firmware não confirma suporte a posição absoluta nem a presets de hardware
+(`GetNodes`/`GetStatus`/`SetPreset` nunca foram testados com sucesso — só
+`ContinuousMove` funciona). Por isso as predefinições (4 por câmera, botões 1–4 na
+barra inferior) são um modelo **aproximado, rastreado só pelo app**:
+
+- `MainWindow` acumula uma posição virtual `(pan, tilt)` por câmera, em
+  `_ptz_cache`/`store.set_ptz_position`. A unidade depende do caminho de conexão:
+  **segundos de `ContinuousMove`** na rede local, **nº de comandos** pela nuvem
+  (lá não há controle de duração, só um nudge por clique). Por isso a chave de
+  rastreamento é `f"{devId}:{'cloud' if remoto else 'lan'}"` — a mesma câmera tem
+  posições e predefinições independentes para cada caminho.
+- Cada clique manual no D-pad (`ptz_move`) soma ao acumulado da câmera ativa.
+- "Salvar predefinição N" grava o acumulado atual nesse slot
+  (`store.save_ptz_preset`).
+- "Ir para N" calcula o delta entre o acumulado atual e o alvo salvo, e dispara os
+  movimentos necessários num eixo por vez: um `ContinuousMove` com a duração exata
+  (rede local, clampada em `MAX_PRESET_SECONDS`) ou uma sequência de nudges
+  espaçados em `CLOUD_PRESET_STEP_MS` (nuvem, clampada em `MAX_PRESET_NUDGES`).
+
+Limitação conhecida: se outro cliente (ex.: app do celular) mover a câmera, o
+rastreamento deste app desalinha — basta salvar a predefinição de novo.
+
 ## Persistência
 
 Tudo em `~/.config/yoosee-viewer/` com permissão 0600:
@@ -118,6 +142,7 @@ Tudo em `~/.config/yoosee-viewer/` com permissão 0600:
 - `accounts/<accessId>.json` — uma conta (email, accessId, accessToken).
 - `active_account` — qual conta está ativa.
 - `cameras.json` — `devId → {ip, user, password}` das câmeras configuradas na LAN.
+- `ptz_positions.json` — `"<devId>:<lan|cloud>" → {pan, tilt, presets: {"1".."4": [pan, tilt]}}`.
 
 ## Runtime da nuvem
 
