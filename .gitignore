@@ -1,0 +1,10 @@
+# material de engenharia reversa e dados pessoais: não distribuir
+docs/
+captures/
+legacy/
+LIMPEZA.md
+PROTOCOLO.md
+*.pcap
+.venv/
+__pycache__/
+dist/
