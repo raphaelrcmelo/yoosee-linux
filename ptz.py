@@ -94,12 +94,12 @@ class PtzController:
         self._busy_until = 0.0
         self._lock = threading.Lock()
 
-    def move(self, direction: str, on_result=None, seconds: float = STEP_SECONDS) -> bool:
+    def move(self, direction: str, on_result=None, seconds: float = STEP_SECONDS, buffer: float = 0.5) -> bool:
         with self._lock:
             now = time.monotonic()
             if now < self._busy_until:
                 return False
-            self._busy_until = now + seconds + 0.5
+            self._busy_until = now + seconds + buffer
 
         def worker():
             try:

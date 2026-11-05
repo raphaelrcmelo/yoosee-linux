@@ -910,16 +910,19 @@ class MainWindow(QMainWindow):
         self.message.setText(text)
         QTimer.singleShot(3000, lambda: self.message.text() == text and self.message.setText(""))
 
-    CLOUD_NUDGE_SPACING = 0.4  # segundos entre nudges pela nuvem (só isso controla a "velocidade" lá)
-    HOLD_SECONDS = 2.5  # duração de cada ContinuousMove ao SEGURAR na rede local (clique avulso usa STEP_SECONDS)
+    CLOUD_NUDGE_SPACING = 0.3  # segundos entre nudges pela nuvem (só isso controla a "velocidade" lá)
+    HOLD_SECONDS = 0.5   # Timeout do ContinuousMove ao SEGURAR (clique avulso usa STEP_SECONDS)
+    HOLD_BUFFER = 0.15   # folga entre comandos ao segurar (clique avulso usa 0.5, mais conservador)
 
     def ptz_move(self, direction: str, is_repeat: bool = False):
         """`is_repeat`: disparo automático de "segurar o botão" (DPad.moved) — nesse caso,
         um comando rejeitado (câmera ainda ocupada com o anterior) é normal e fica em
-        silêncio (só um clique avulso rejeitado mostra aviso), e o movimento usa uma
-        duração maior (HOLD_SECONDS): a câmera fica parada ~0.5s entre comandos aceitos
-        de qualquer duração, então comandos mais longos reduzem a fração desse tempo
-        parado e a câmera parece mais rápida enquanto o botão fica pressionado."""
+        silêncio (só um clique avulso rejeitado mostra aviso). A câmera parece só girar
+        por um tempo curto e fixo a cada comando, não importa o Timeout declarado — então
+        ao segurar, reenviamos com Timeout e intervalo bem menores (HOLD_SECONDS/
+        HOLD_BUFFER) em vez de um comando longo, pra ficar o mais perto possível de
+        contínuo. Se isso fizer a câmera ignorar comandos (muito próximos), aumente
+        HOLD_BUFFER."""
         ch = self.selected
         if ch and ch.remote:
             dev_id = ch.device["devId"]
@@ -947,6 +950,7 @@ class MainWindow(QMainWindow):
         name = ch.device["remarkName"]
         dev_id = ch.device["devId"]
         seconds = self.HOLD_SECONDS if is_repeat else ptz.STEP_SECONDS
+        buffer = self.HOLD_BUFFER if is_repeat else 0.5
 
         def on_result(ok):
             if ok:
@@ -958,7 +962,7 @@ class MainWindow(QMainWindow):
             else:
                 _dispatcher.invoke.emit(lambda _: self._flash(f"PTZ falhou em {name}"), None)
 
-        if not ctrl.move(direction, on_result, seconds=seconds) and not is_repeat:
+        if not ctrl.move(direction, on_result, seconds=seconds, buffer=buffer) and not is_repeat:
             self._flash("Aguarde o movimento anterior terminar.")
 
     # ---- predefinições de PTZ ----
