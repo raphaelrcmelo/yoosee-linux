@@ -838,8 +838,9 @@ class MainWindow(QMainWindow):
         self._refresh_preset_buttons()
 
     def _refresh_preset_buttons(self):
-        dev = self.selected.device if self.selected else None
-        saved = store.get_ptz_presets(dev["devId"]) if dev else {}
+        ch = self.selected
+        dev = ch.device if ch else None
+        saved = store.get_ptz_presets(self._ptz_key(ch)) if dev else {}
         for slot, btn in self.preset_btns.items():
             btn.setEnabled(dev is not None)
             btn.setProperty("filled", "true" if slot in saved else "false")
