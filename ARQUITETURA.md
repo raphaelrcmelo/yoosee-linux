@@ -48,6 +48,12 @@ Cada câmera abre por um de dois caminhos, decidido em runtime:
   - Velocidade abaixo de 1.0 não move; usar ±1.0. Comandos sobrepostos são descartados.
 - **Acesso remoto nativo**: ONVIF/RTSP só alcançam a câmera na LAN; de fora, via VPN
   (ex.: WireGuard) para chegar ao IP da câmera.
+- **Segurar o botão do D-pad**: como não há `Stop` que funcione, "mover continuamente"
+  é aproximado por `DPad` reenviando o comando de movimento a cada 200ms enquanto o
+  botão fica pressionado; `MainWindow.ptz_move` só aceita um novo comando quando o
+  anterior já tem chance de ter sido aceito pela câmera (trava de `PtzController` na
+  rede local, `CLOUD_NUDGE_SPACING` pela nuvem) — tentativas de repetição rejeitadas
+  ficam em silêncio (`is_repeat=True`), só um clique avulso rejeitado mostra aviso.
 
 ## Câmeras fora da rede (SDK oficial no Wine)
 

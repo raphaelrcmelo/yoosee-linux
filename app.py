@@ -453,13 +453,22 @@ class ChannelView(QFrame):
 
 
 class DPad(QFrame):
-    moved = Signal(str)
+    """Emite `moved(direção, é_repetição)` ao clicar, e repetidamente enquanto o
+    botão fica pressionado — a câmera não tem um comando de "parar" que funcione
+    (ver ARQUITETURA.md), então "segurar para mover" é aproximado reenviando o
+    comando de movimento no maior ritmo que a câmera aceita."""
+    moved = Signal(str, bool)
     SIZE = 148
     BTN_SIZE = 46
+    REPEAT_MS = 200  # só uma tentativa; quem decide se aceita é o lado que já sabe o cooldown real
 
     def __init__(self):
         super().__init__(objectName="dpad")
         self.setFixedSize(self.SIZE, self.SIZE)
+        self._held: str | None = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.REPEAT_MS)
+        self._timer.timeout.connect(self._repeat)
         grid = QGridLayout(self)
         grid.setContentsMargins(8, 8, 8, 8)
         grid.setSpacing(2)
@@ -469,9 +478,23 @@ class DPad(QFrame):
         ):
             btn = QToolButton(text=glyph)
             btn.setFixedSize(self.BTN_SIZE, self.BTN_SIZE)
-            btn.setToolTip(tip)
-            btn.clicked.connect(lambda _=False, d=direction: self.moved.emit(d))
+            btn.setToolTip(f"{tip} (segure para mover continuamente)")
+            btn.pressed.connect(lambda d=direction: self._start(d))
+            btn.released.connect(self._stop)
             grid.addWidget(btn, row, col, Qt.AlignCenter)
+
+    def _start(self, direction: str):
+        self._held = direction
+        self.moved.emit(direction, False)
+        self._timer.start()
+
+    def _repeat(self):
+        if self._held:
+            self.moved.emit(self._held, True)
+
+    def _stop(self):
+        self._timer.stop()
+        self._held = None
 
 
 class MainWindow(QMainWindow):
@@ -486,6 +509,7 @@ class MainWindow(QMainWindow):
         self.cameras = store.load_cameras()
         self.ptz: dict[str, PtzController] = {}
         self._ptz_cache: dict[str, tuple[float, float]] = {}  # posição aproximada (pan, tilt)
+        self._cloud_ptz_last: dict[str, float] = {}  # devId -> monotonic() do último nudge aceito
         self.channels = [ChannelView(i) for i in range(max(self.LAYOUTS))]
         self._media_devices = QMediaDevices(self)
         self._media_devices.audioOutputsChanged.connect(self._follow_default_output)
@@ -886,17 +910,32 @@ class MainWindow(QMainWindow):
         self.message.setText(text)
         QTimer.singleShot(3000, lambda: self.message.text() == text and self.message.setText(""))
 
-    def ptz_move(self, direction: str):
+    CLOUD_NUDGE_SPACING = 0.6  # segundos; mesmo ritmo usado ao reproduzir predefinições pela nuvem
+
+    def ptz_move(self, direction: str, is_repeat: bool = False):
+        """`is_repeat`: disparo automático de "segurar o botão" (DPad.moved) — nesse caso,
+        um comando rejeitado (câmera ainda ocupada com o anterior) é normal e fica em
+        silêncio; só um clique avulso rejeitado mostra aviso."""
         ch = self.selected
         if ch and ch.remote:
-            if not ch.remote.ptz(direction):
-                self._flash("A conexão pela nuvem ainda não está pronta.")
+            dev_id = ch.device["devId"]
+            now = time.monotonic()
+            # a nuvem não tem trava de "ocupado" própria (ver PtzController pra rede local);
+            # sem isso, segurar o botão inundaria a ponte de comandos mais rápido do que a
+            # câmera aceita.
+            if now - self._cloud_ptz_last.get(dev_id, 0.0) < self.CLOUD_NUDGE_SPACING:
                 return
+            if not ch.remote.ptz(direction):
+                if not is_repeat:
+                    self._flash("A conexão pela nuvem ainda não está pronta.")
+                return
+            self._cloud_ptz_last[dev_id] = now
             dx, dy = ptz.DIRECTIONS[direction]
-            self._update_ptz_position(ch.device["devId"], dx, dy)  # unidade: 1 comando
+            self._update_ptz_position(dev_id, dx, dy)  # unidade: 1 comando
             return
         if not ch or not ch.lan:
-            self._flash("Selecione um canal com câmera aberta.")
+            if not is_repeat:
+                self._flash("Selecione um canal com câmera aberta.")
             return
         cam = ch.lan
         ctrl = self.ptz.setdefault(cam.ip, PtzController(cam.ip, cam.user, cam.password))
@@ -913,7 +952,7 @@ class MainWindow(QMainWindow):
             else:
                 _dispatcher.invoke.emit(lambda _: self._flash(f"PTZ falhou em {name}"), None)
 
-        if not ctrl.move(direction, on_result):
+        if not ctrl.move(direction, on_result) and not is_repeat:
             self._flash("Aguarde o movimento anterior terminar.")
 
     # ---- predefinições de PTZ ----
