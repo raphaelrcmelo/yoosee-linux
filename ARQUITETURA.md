@@ -255,7 +255,11 @@ funciona bem na prática, mas pode acumular um pequeno desvio com o tempo.
 
 ## Persistência
 
-Tudo em `~/.config/yoosee-viewer/` com permissão 0600:
+Tudo em `~/.config/yoosee-viewer/` com permissão 0600. **No Flatpak** o `~/.config` e o
+`~/.local/share` literais são efêmeros (somem a cada execução; a v0.1.0 perdia conta, câmeras e
+posições toda vez que o app fechava): lá os dados vão para `$XDG_CONFIG_HOME` e
+`$XDG_DATA_HOME` (`~/.var/app/<id>/config` e `/data`), via `settings.user_base_dir` (só quando
+`FLATPAK_ID` está definido, pra não mudar o caminho de quem já usa fora do Flatpak):
 
 - `accounts/<accessId>.json` — uma conta (email, accessId, accessToken).
 - `active_account` — qual conta está ativa.

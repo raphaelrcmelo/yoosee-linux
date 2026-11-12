@@ -15,8 +15,11 @@ import subprocess
 import threading
 import time
 
+from settings import user_base_dir
+
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-RUNTIME_DIR = os.environ.get("YOOSEE_RUNTIME", os.path.expanduser("~/.local/share/yoosee-viewer"))
+RUNTIME_DIR = os.environ.get("YOOSEE_RUNTIME",
+                             os.path.join(user_base_dir("XDG_DATA_HOME", "~/.local/share"), "yoosee-viewer"))
 
 
 def find_wine() -> tuple[str | None, str | None]:
