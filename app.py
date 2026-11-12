@@ -15,12 +15,12 @@ from urllib.parse import quote
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg*=false")
 
 import urllib3
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QConicalGradient, QIcon, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+    QApplication, QSizePolicy, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QStackedWidget, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
@@ -99,6 +99,12 @@ QListWidget::item:selected {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0
                 color: {PLACE_TEXT}; font-size: 14px;
                 border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
 
+#loader {{ background: qradialgradient(cx:0.5, cy:0.45, radius:0.9, fx:0.5, fy:0.45,
+                                       stop:0 {PLACE_HI}, stop:1 {TILE});
+           border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
+#loader QWidget {{ background: transparent; }}
+#loaderCaption {{ color: {PLACE_TEXT}; font-size: 12px; letter-spacing: 1px; }}
+
 QToolButton, QPushButton {{ background: {BG_RAISED}; border: none; border-radius: 10px;
                             padding: 8px 14px; color: {TEXT}; }}
 QToolButton:hover, QPushButton:hover {{ background: {BG_RAISED_HOVER}; color: {ACCENT}; }}
@@ -156,6 +162,14 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: tran
 
 def build_style(theme: str) -> str:
     return STYLE_TEMPLATE.format(**THEMES[theme])
+
+
+def apply_theme(app: QApplication, theme: str) -> str:
+    """Aplica o QSS e guarda o tema na propriedade `theme` do app (o spinner pinta com ela)."""
+    theme = theme if theme in THEMES else "dark"
+    app.setProperty("theme", theme)
+    app.setStyleSheet(build_style(theme))
+    return theme
 
 
 class _Dispatcher(QObject):
@@ -308,6 +322,153 @@ class CameraDialog(QDialog):
         return self.combo.currentText().split(" ", 1)[0].strip()
 
 
+class LiveCatchUp(QObject):
+    """Recupera o atraso do início de um stream ao vivo no QMediaPlayer.
+
+    O FFmpeg gasta 2-4 s analisando o stream antes do 1º quadro, e os pacotes lidos nesse
+    tempo ficam numa fila que o player toca desde o começo, em tempo real: a imagem fica
+    atrasada exatamente pelo tempo da análise e nunca alcança o ao vivo (medido na
+    câmera real: +2,8 s sobre o piso físico de ~0,6 s; `probeSize` não mexe nisso, e
+    `LowLatencyStreaming` só tira ~0,25 s e atrasa o 1º quadro em ~7 s). Aqui aceleramos a reprodução por tempo suficiente pra consumir
+    essa fila e voltamos a 1.0 — medido: atraso extra cai de +2,8 s para +0,7 s.
+    """
+    RATE = 2.0
+    CONNECT_S = 0.1     # RTSP DESCRIBE/SETUP/PLAY até o 1º pacote
+    MIN_LAG_S = 0.8     # abaixo disso não vale a pena acelerar
+    MAX_LAG_S = 6.0     # teto de segurança (estimativa absurda não trava o canal em 2x)
+    ENABLED = True      # interruptor pra depuração/medição
+    MARGIN_S = 0.3
+
+    def __init__(self, player: QMediaPlayer, sink):
+        super().__init__(player)
+        self.player, self.sink = player, sink
+        self._t_open = 0.0
+        self._armed = False
+        self._restore = QTimer(self)
+        self._restore.setSingleShot(True)
+        self._restore.timeout.connect(self._back_to_normal)
+
+    def arm(self):
+        """Chamar logo antes de `player.setSource(...)` de um stream ao vivo."""
+        self.reset()
+        if not self.ENABLED:
+            return
+        self._t_open = time.monotonic()
+        self._armed = True
+        self.sink.videoFrameChanged.connect(self._on_frame)
+
+    def reset(self):
+        self._restore.stop()
+        if self._armed:
+            self._armed = False
+            try:
+                self.sink.videoFrameChanged.disconnect(self._on_frame)
+            except (RuntimeError, TypeError):
+                pass
+        if self.player.playbackRate() != 1.0:
+            self.player.setPlaybackRate(1.0)
+
+    def _on_frame(self, frame):
+        if not self._armed:
+            return
+        self._armed = False
+        try:
+            self.sink.videoFrameChanged.disconnect(self._on_frame)
+        except (RuntimeError, TypeError):
+            pass
+        start = frame.startTime()
+        pts = start / 1e6 if start >= 0 else self.player.position() / 1000.0
+        lag = (time.monotonic() - self._t_open - self.CONNECT_S) - pts
+        if lag < self.MIN_LAG_S:
+            return
+        lag = min(lag, self.MAX_LAG_S)
+        self.player.setPlaybackRate(self.RATE)
+        self._restore.start(int((lag / (self.RATE - 1.0) + self.MARGIN_S) * 1000))
+
+    def _back_to_normal(self):
+        self.player.setPlaybackRate(1.0)
+
+
+class Spinner(QWidget):
+    """Anel giratório com cauda em degradê (laranja -> rosa da identidade, trocando com o tema).
+    Só anima enquanto visível, pra não gastar CPU nos canais que já estão no ar."""
+    SIZE = 46
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("spinner")
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+
+    def showEvent(self, event):
+        self._timer.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def _tick(self):
+        self._angle = (self._angle - 10) % 360
+        self.update()
+
+    def paintEvent(self, _event):
+        theme = THEMES.get(QApplication.instance().property("theme") or "dark", THEMES["dark"])
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        width = 4.0
+        rect = QRectF(width, width, self.SIZE - 2 * width, self.SIZE - 2 * width)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(theme["BORDER"]), width))
+        p.drawEllipse(rect)
+        head, tail = QColor(theme["ACCENT"]), QColor(theme["ACCENT_2"])
+        tail.setAlpha(0)
+        grad = QConicalGradient(rect.center(), self._angle)
+        grad.setColorAt(0.0, head)
+        grad.setColorAt(0.65, tail)
+        grad.setColorAt(1.0, tail)
+        p.setPen(QPen(QBrush(grad), width, Qt.SolidLine, Qt.RoundCap))
+        p.drawEllipse(rect)
+
+
+class LoadingOverlay(QWidget):
+    """Cobre o corpo do quadro (vídeo/placeholder) com um spinner até a imagem chegar.
+    Deixa os cliques passarem: selecionar o canal e o duplo clique seguem funcionando."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("loader")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        v = QVBoxLayout(self)
+        v.setAlignment(Qt.AlignCenter)
+        v.setSpacing(12)
+        self.spinner = Spinner()
+        v.addWidget(self.spinner, 0, Qt.AlignHCenter)
+        self.caption = QLabel("Carregando imagem…", objectName="loaderCaption", alignment=Qt.AlignCenter)
+        self.caption.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        v.addWidget(self.caption)
+        self.hide()
+
+    def begin(self, caption: str = "Carregando imagem…"):
+        self.caption.setText(caption)
+        self.setGeometry(self.parentWidget().rect())
+        self.raise_()
+        self.show()
+
+    def end(self):
+        self.hide()
+
+    def set_caption(self, text: str):
+        """Acompanha o chip de estado do canal, só nas mensagens de progresso ("conectando…")."""
+        if text.endswith("…"):
+            self.caption.setText(text[:1].upper() + text[1:])
+
+
 class ChannelView(QFrame):
     clicked = Signal(object)
     double_clicked = Signal(object)
@@ -342,7 +503,17 @@ class ChannelView(QFrame):
 
         self.placeholder = QLabel(f"Canal {index + 1}", objectName="placeholder", alignment=Qt.AlignCenter)
         self.video = QVideoWidget()
+        # O QGridLayout reparte o espaço proporcionalmente ao tamanho sugerido de cada item, e o do
+        # QVideoWidget é a resolução nativa do vídeo: câmeras com resoluções diferentes ganhavam
+        # quadros de tamanhos diferentes. Ignorar o hint (junto com o stretch igual em
+        # apply_layout) deixa todos os quadros iguais.
+        for w in (self.video, self.placeholder):
+            w.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            w.setMinimumSize(0, 0)
+        self.placeholder.setWordWrap(True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.body = QStackedWidget()
+        self.body.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.body.addWidget(self.placeholder)
         self.body.addWidget(self.video)
 
@@ -351,12 +522,18 @@ class ChannelView(QFrame):
         layout.setSpacing(0)
         layout.addWidget(header)
         layout.addWidget(self.body, 1)
+        self.loader = LoadingOverlay(self.body)
+        self._frame_hooked = False
+        self.state.changed.connect(self.loader.set_caption)
 
         self.audio = QAudioOutput()
         self.audio.setMuted(True)
         self.player = QMediaPlayer()
         self.player.setVideoOutput(self.video)
         self.player.setAudioOutput(self.audio)
+        # Não usar QPlaybackOptions.LowLatencyStreaming: só tira ~0,25 s de latência, mas o 1º
+        # quadro passou a levar ~9 s em vez de ~2,5 s (medido). Quem resolve o atraso é o catch-up.
+        self.catchup = LiveCatchUp(self.player, self.video.videoSink())
         self.player.mediaStatusChanged.connect(self._on_status)
         self.player.errorOccurred.connect(self._on_error)
         # câmeras pela nuvem: o áudio (AAC) chega num stream separado do vídeo
@@ -365,16 +542,38 @@ class ChannelView(QFrame):
         self.audio_player = QMediaPlayer()
         self.audio_player.setAudioOutput(self.remote_audio)
 
-        for w in (self, self.video, self.placeholder):
+        for w in (self, self.video, self.placeholder, self.body):
             w.installEventFilter(self)
         self._refresh_header()
 
     def eventFilter(self, obj, event):
+        if obj is self.body:  # filtro do corpo só pra redimensionar o loader; cliques já vêm dos filhos
+            if event.type() == QEvent.Resize:
+                self.loader.setGeometry(self.body.rect())
+            return False
         if event.type() == QEvent.MouseButtonPress:
             self.clicked.emit(self)
         elif event.type() == QEvent.MouseButtonDblClick:
             self.double_clicked.emit(self)
         return False
+
+    def _begin_loading(self):
+        self.loader.begin()
+        if not self._frame_hooked:
+            self.video.videoSink().videoFrameChanged.connect(self._on_first_frame)
+            self._frame_hooked = True
+
+    def _on_first_frame(self, _frame):
+        self._end_loading()
+
+    def _end_loading(self):
+        self.loader.end()
+        if self._frame_hooked:
+            self._frame_hooked = False
+            try:
+                self.video.videoSink().videoFrameChanged.disconnect(self._on_first_frame)
+            except (RuntimeError, TypeError):
+                pass
 
     def set_selected(self, selected: bool):
         self.setProperty("selected", "true" if selected else "false")
@@ -390,6 +589,7 @@ class ChannelView(QFrame):
         self.device = device
         self.account_file = account_file
         self._refresh_header()
+        self._begin_loading()
         if not camera:
             self._open_cloud()
             return
@@ -409,6 +609,7 @@ class ChannelView(QFrame):
 
     def _open_lan(self, camera: store.LanCamera):
         self.lan = camera
+        self.catchup.arm()
         self.player.setSource(QUrl(rtsp_url(camera, self.quality)))
         self.body.setCurrentWidget(self.video)
         self.player.play()
@@ -417,6 +618,7 @@ class ChannelView(QFrame):
         device, account_file = self.device, self.account_file
         self.lan = None
         if not account_file or not p2p.available():
+            self._end_loading()
             self.placeholder.setText(
                 f"{device['remarkName']}\n\nAcesso pela nuvem não instalado (veja o README).\n"
                 "Se a câmera está na sua rede, clique nela na lista com o botão direito → "
@@ -439,6 +641,7 @@ class ChannelView(QFrame):
         elif event == "STATE video" and self.player.source().isEmpty():
             # só abre o player quando o 1º keyframe já está a caminho: algumas
             # câmeras H.264 demoram >20 s e o probe do QMediaPlayer desistiria antes
+            self.catchup.arm()
             self.player.setSource(QUrl(stream.url))
             self.body.setCurrentWidget(self.video)
             self.player.play()
@@ -454,6 +657,7 @@ class ChannelView(QFrame):
             d, acc = self.device, self.account_file
             QTimer.singleShot(2000, lambda: self.device is d and self.open(d, None, acc, keep_retries=True))
         elif kind == "ERROR":
+            self._end_loading()
             self.state.setText("erro")
             self.body.setCurrentWidget(self.placeholder)
             self.placeholder.setText(f"{self.device['remarkName']}\n\nFalha ao conectar pela nuvem ({value}).")
@@ -483,6 +687,8 @@ class ChannelView(QFrame):
         if self.remote:
             self.remote.stop()
             self.remote = None
+        self.catchup.reset()
+        self._end_loading()
         self.player.stop()
         self.player.setSource(QUrl())
         self.audio_player.stop()
@@ -527,6 +733,7 @@ class ChannelView(QFrame):
             QTimer.singleShot(2000, lambda: self.device is d and self.open(d, None, acc, keep_retries=True))
             return
         if self.device:
+            self._end_loading()
             self.state.setText("erro")
             self.body.setCurrentWidget(self.placeholder)
             self.placeholder.setText(f"{self.device['remarkName']}\n\nFalha no vídeo: {message}")
@@ -534,7 +741,8 @@ class ChannelView(QFrame):
 
 class ChipLabel(QLabel):
     """QLabel que some quando o texto está vazio — pra chips e toasts não deixarem
-    um "pílula" vazia ocupando espaço na tela."""
+    um "pílula" vazia ocupando espaço na tela. Emite `changed` a cada texto novo."""
+    changed = Signal(str)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -543,6 +751,7 @@ class ChipLabel(QLabel):
     def setText(self, text: str):
         super().setText(text)
         self.setVisible(bool(text))
+        self.changed.emit(text)
 
 
 class DPad(QFrame):
@@ -612,6 +821,8 @@ class MainWindow(QMainWindow):
         if self.theme not in THEMES:
             self.theme = "dark"
         self._relogin_last: dict[str, float] = {}  # access_id -> monotonic() da última reconexão
+        self.slots: dict[int, dict] = {}   # arrumação da grade: quadro -> {"devId", "quality"} (ver _save_grid)
+        self._grid_key: str | None = None  # conta cuja arrumação já foi restaurada nesta sessão
         self.selected: ChannelView | None = None
         self.focused: ChannelView | None = None
 
@@ -640,7 +851,7 @@ class MainWindow(QMainWindow):
         for ch in self.channels:
             ch.clicked.connect(self.select_channel)
             ch.double_clicked.connect(self.toggle_focus)
-            ch.closed.connect(lambda c: c.stop())
+            ch.closed.connect(self._on_channel_closed)
             ch.message.connect(self._flash)
         self.apply_layout()
         self.select_channel(self.channels[0])
@@ -673,7 +884,7 @@ class MainWindow(QMainWindow):
     def toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
         store.set_setting("theme", self.theme)
-        QApplication.instance().setStyleSheet(build_style(self.theme))
+        apply_theme(QApplication.instance(), self.theme)
         self._refresh_theme_widgets()
 
     def _refresh_theme_widgets(self):
@@ -856,6 +1067,7 @@ class MainWindow(QMainWindow):
         store.set_active_id(account.access_id)
         for ch in self.channels:
             ch.stop()
+        self.slots, self._grid_key = {}, None  # a arrumação é por conta: nada vaza pra próxima
         self._rebuild_account_menu()
         self.load_devices()
 
@@ -869,6 +1081,7 @@ class MainWindow(QMainWindow):
             ch.stop()
         self.device_list.clear()
         self.devices = []
+        self.slots, self._grid_key = {}, None
         self.account = store.get_active_account()
         self._rebuild_account_menu()
         if self.account:
@@ -920,7 +1133,12 @@ class MainWindow(QMainWindow):
         self.devices = resp["data"]["deviceList"]
         self._fill_device_list()
         self.sidebar_status.setText("")
-        self._autoplay()
+        key = self._grid_account_key()
+        if key != self._grid_key or not any(ch.device for ch in self.channels[: self.layout_size]):
+            # 1ª carga desta conta na sessão: restaura a arrumação. Atualizar a lista (⟳) com
+            # canais abertos NÃO reabre tudo do zero (antes resetava a grade pra ordem da lista).
+            self._grid_key = key
+            self._autoplay()
 
     def _on_relogin(self, acc, result):
         if acc is not self.account:
@@ -969,7 +1187,84 @@ class MainWindow(QMainWindow):
     def _account_file(self) -> str | None:
         return store.account_path(self.account.access_id) if self.account else None
 
+    # ---- arrumação da grade (gravada) ----
+    #
+    # O usuário monta a grade do jeito que quer: qual câmera em qual quadro, quais quadros fechou,
+    # HD/SD de cada um e 1/4/9. Isso é gravado por conta em settings.json ("grids") a cada ação
+    # dele — e NÃO em closeEvent, troca de conta ou stop() internos, que também param canais e
+    # apagariam a arrumação. `self.slots` é a memória dela e inclui os quadros "estacionados"
+    # (além do layout atual): voltam sozinhos quando o layout cresce de novo.
+
+    def _grid_account_key(self) -> str | None:
+        return self.account.email.lower() if self.account else None  # e-mail: o access_id muda em cada login
+
+    def _sync_slots(self):
+        """Os quadros visíveis definem exatamente o estado dos seus slots; os estacionados ficam."""
+        for i, ch in enumerate(self.channels[: self.layout_size]):
+            if ch.device:
+                self.slots[i] = {"devId": ch.device["devId"], "quality": ch.quality}
+            else:
+                self.slots.pop(i, None)
+
+    def _save_grid(self):
+        key = self._grid_account_key()
+        if key is None:
+            return
+        self._sync_slots()
+        grids = store.get_setting("grids", {})
+        grids[key] = {"layout": self.layout_size,
+                      "slots": {str(i): spec for i, spec in sorted(self.slots.items())}}
+        store.set_setting("grids", grids)
+
+    def _open_slot(self, i: int) -> bool:
+        spec = self.slots.get(i)
+        if not spec or not 0 <= i < self.layout_size:
+            return False
+        dev = next((d for d in self.devices if d["devId"] == spec.get("devId")), None)
+        if dev is None:
+            return False  # câmera sumiu da conta: o slot fica na memória, só não abre
+        cam = self.cameras.get(dev["devId"])
+        if not cam and not p2p.available():
+            return False
+        ch = self.channels[i]
+        ch.quality = spec.get("quality") if spec.get("quality") in ("main", "sub") else "main"
+        ch.open(dev, cam, self._account_file())
+        return True
+
+    def _open_pending_slots(self) -> int:
+        """Abre os quadros visíveis que têm câmera na memória mas estão vazios."""
+        return sum(1 for i in range(self.layout_size) if not self.channels[i].device and self._open_slot(i))
+
+    def _restore_grid(self) -> bool:
+        """Restaura a arrumação gravada. False = nada gravado (ou nada aproveitável): usar o padrão."""
+        key = self._grid_account_key()
+        saved = store.get_setting("grids", {}).get(key) if key else None
+        if not isinstance(saved, dict):
+            return False
+        layout = saved.get("layout")
+        if layout in self.LAYOUTS and layout != self.layout_size:
+            self.layout_size, self.focused = layout, None
+            self.apply_layout()
+        slots = {}
+        for k, spec in (saved.get("slots") or {}).items():
+            try:
+                idx = int(k)
+            except ValueError:
+                continue
+            if 0 <= idx < len(self.channels) and isinstance(spec, dict):
+                slots[idx] = spec
+        self.slots = slots
+        if not slots:
+            return True  # arrumação gravada vazia: o usuário fechou tudo, respeita
+        return self._open_pending_slots() > 0
+
+    def _on_channel_closed(self, ch):
+        ch.stop()
+        self._save_grid()
+
     def _autoplay(self):
+        if self._restore_grid():
+            return
         free = iter(self.channels[: self.layout_size])
         for dev in self.devices:
             cam = self.cameras.get(dev["devId"])
@@ -985,6 +1280,7 @@ class MainWindow(QMainWindow):
         target = self.selected or self.channels[0]
         target.open(dev, self.cameras.get(dev["devId"]), self._account_file())
         self.select_channel(target)
+        self._save_grid()
 
     def _device_menu(self, pos):
         item = self.device_list.itemAt(pos)
@@ -1017,10 +1313,16 @@ class MainWindow(QMainWindow):
             self.grid.removeWidget(ch)
             ch.hide()
         if self.focused is not None:
+            for i in range(3):
+                self.grid.setRowStretch(i, 1 if i == 0 else 0)
+                self.grid.setColumnStretch(i, 1 if i == 0 else 0)
             self.grid.addWidget(self.focused, 0, 0)
             self.focused.show()
             return
         cols = {1: 1, 4: 2, 9: 3}[self.layout_size]
+        for i in range(3):  # linhas/colunas iguais; as que sobram de um layout maior zeram
+            self.grid.setRowStretch(i, 1 if i < cols else 0)
+            self.grid.setColumnStretch(i, 1 if i < cols else 0)
         for i, ch in enumerate(self.channels[: self.layout_size]):
             self.grid.addWidget(ch, i // cols, i % cols)
             ch.show()
@@ -1029,12 +1331,15 @@ class MainWindow(QMainWindow):
         self.layout_btn.setText(str(self.layout_size))
 
     def cycle_layout(self):
+        self._sync_slots()  # guarda o que está aberto antes do layout encolher (apply_layout para os de fora)
         idx = self.LAYOUTS.index(self.layout_size)
         self.layout_size = self.LAYOUTS[(idx + 1) % len(self.LAYOUTS)]
         self.focused = None
         self.apply_layout()
+        self._open_pending_slots()  # quadros estacionados voltam quando o layout cresce
         if self.selected not in self.channels[: self.layout_size]:
             self.select_channel(self.channels[0])
+        self._save_grid()
 
     def toggle_focus(self, ch):
         self.focused = None if self.focused is ch else ch
@@ -1044,6 +1349,7 @@ class MainWindow(QMainWindow):
         if self.selected:
             self.selected.stop()
             self._refresh_preset_buttons()
+            self._save_grid()
 
     def select_channel(self, ch):
         if self.selected is not None:
@@ -1285,6 +1591,7 @@ class MainWindow(QMainWindow):
         if self.selected:
             self.selected.toggle_quality()
             self.select_channel(self.selected)
+            self._save_grid()
 
     def closeEvent(self, event):
         for ch in self.channels:
@@ -1304,7 +1611,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Câmeras Yoosee")
     theme = store.get_setting("theme", "dark")
-    app.setStyleSheet(build_style(theme if theme in THEMES else "dark"))
+    apply_theme(app, theme)
     _dispatcher = _Dispatcher()
     win = MainWindow()
     win.show()

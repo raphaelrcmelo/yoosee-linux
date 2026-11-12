@@ -87,6 +87,54 @@ Cada câmera abre por um de dois caminhos, decidido em runtime:
   3,5s depois de soltar). O que diferencia o app do Windows é a latência do
   vídeo exibido, não o motor.
 
+## Latência do vídeo ao vivo (rede local)
+
+Medida de ponta a ponta com `tools/medir_latencia.py` (manda um passo de PTZ e cronometra
+até o movimento aparecer no `ChannelView` do app; compara com um ffmpeg `-fflags nobuffer`
+lendo o mesmo stream, que dá o **piso físico de ~0,6 s**: motor + codificação + rede).
+
+- **Causa do atraso grande (~+2,8 s sobre o piso)**: o FFmpeg do Qt gasta 2–4 s analisando o
+  stream antes do 1º quadro (`LoadedMedia` em ~2,4 s no SD, ~2,7 s no HD). Os pacotes lidos
+  nesse tempo ficam enfileirados e são tocados do início, em tempo real: a imagem fica
+  atrasada pelo tempo da análise e **nunca alcança o ao vivo**.
+- **Correção** (`LiveCatchUp`, `app.py`): ao chegar o 1º quadro, estima o atraso
+  (`agora − abertura − 0,1 − PTS do quadro`) e acelera a reprodução (2×) por
+  `atraso/(2−1) + 0,3 s`, voltando a 1× depois. Resultado: **3,6 s → 1,4 s** no total
+  (SD e HD), sem mudar o tempo de abertura (~2,5 s SD, ~3,4 s HD). Quem usa:
+  `ChannelView._open_lan` e o evento `STATE video` da nuvem; `stop()` reseta.
+- **O que NÃO funcionou / não usar**:
+  - `QPlaybackOptions.LowLatencyStreaming` (Qt ≥ 6.10): sozinha tira só ~0,25 s e faz o 1º
+    quadro demorar ~9–11 s (o HEVC perde o IDR inicial e espera o próximo). Combinada com
+    o catch-up chegava a ~0,5 s total, mas a abertura lenta não compensa.
+  - `setProbeSize(...)`: não mexeu em nada (o atraso é de tempo de análise, não de bytes).
+  - Velocidade ONVIF maior (2.0/8.0): o passo do motor é fixo (ver seção de PTZ).
+- **Pela nuvem não havia esse problema**: o relay entrega o stream já pronto; medido
+  0,43 s do comando ao movimento, com ou sem o catch-up (`LiveCatchUp.ENABLED = False`).
+- **Cuidados ao medir** (aprendido na prática): a câmera suporta poucas sessões RTSP e **não
+  aceita dois leitores no stream `main`** (por isso `NOFF=1`); matar um leitor sem TEARDOWN
+  deixa sessão pendurada e já travou uma câmera por alguns minutos. Feche o app antes.
+- Não medido: decodificação por hardware (VAAPI/CUDA), que o app usa numa janela real; os
+  testes rodaram headless, com decodificação por software.
+
+## Loader de carregamento
+
+Enquanto a imagem não chega, cada canal mostra um spinner (anel com cauda em degradê, cores
+do tema) sobre o corpo do quadro, com a legenda acompanhando o chip de estado ("Conectando
+pela nuvem…", "Aguardando vídeo…"). `LoadingOverlay` é filho do `body` do `ChannelView`
+(cobre o vídeo e o placeholder), é transparente a cliques (selecionar/duplo clique seguem
+funcionando) e só anima enquanto visível. Aparece em `open()`; some no 1º quadro
+(`videoFrameChanged`, desconectado em seguida), em erro e no `stop()`. O tema vem da
+propriedade `theme` do `QApplication` (`apply_theme`).
+
+## Grade de câmeras
+
+O `QGridLayout` reparte o espaço proporcionalmente ao tamanho sugerido de cada item, e o do
+`QVideoWidget` é a resolução nativa do vídeo: câmeras com resoluções diferentes ganhavam
+quadros de tamanhos diferentes (ex.: colunas 1 : 2,1). Fix: `QVideoWidget`, placeholder e
+`body` com `QSizePolicy.Ignored` + stretch igual em todas as linhas/colunas
+(`apply_layout`). Os quadros ficam iguais (±1 px de arredondamento); a barra preta dentro do
+quadro continua dependendo da proporção de cada câmera (4:3 fica com barras laterais).
+
 ## Câmeras fora da rede (SDK oficial no Wine)
 
 Em vez de reimplementar o protocolo P2P proprietário (Tencent IoTVideo / Gwell), o
@@ -214,6 +262,18 @@ Tudo em `~/.config/yoosee-viewer/` com permissão 0600:
 - `cameras.json` — `devId → {ip, user, password}` das câmeras configuradas na LAN.
 - `ptz_positions.json` — rastreamento: `"<devId>" → {pan, tilt}`; predefinições:
   `"<devId>:presets" → {"1".."4": [pan, tilt]}`.
+- `settings.json` — preferências do app: `theme` e `grids`, a **arrumação da grade por conta**
+  (chave = e-mail em minúsculas): `{"layout": 1|4|9, "slots": {"<quadro>": {"devId", "quality"}}}`.
+  - Grava só em **ações do usuário** (abrir câmera num quadro, fechar com ✕/■, HD/SD, mudar o
+    layout) via `MainWindow._save_grid`. Nunca em `closeEvent`, troca de conta ou `stop()`
+    interno: esses também param canais e apagariam a arrumação.
+  - `MainWindow.slots` é a memória dela e inclui os quadros **estacionados** (além do layout
+    atual, ex.: ao ir de 9 para 1): reabrem sozinhos quando o layout cresce.
+  - Abertura do app → `_restore_grid`. Sem nada gravado (ou nada aproveitável, ex.: câmeras
+    removidas da conta) → padrão antigo (ordem da lista). Arrumação gravada **vazia** é
+    respeitada (o usuário fechou tudo). Câmeras novas na conta não entram sozinhas numa
+    arrumação já gravada: abrem pela lista.
+  - Atualizar a lista (⟳) com canais abertos não reabre nada (antes zerava a grade).
 
 ## Runtime da nuvem
 
