@@ -7,6 +7,7 @@ o player acrescenta. Mesma métrica nos dois: diferença média de quadros 64x36
 
     .venv/bin/python tools/medir_latencia.py <final-do-devId> [main|sub] [tentativas]
     NOFF=1 ...   só o app (a câmera não aceita 2 leitores no stream "main": usa o piso fixo de 0,6 s)
+    MEDIR_JANELA=10 ...   segundos esperando o movimento aparecer (padrão 5; aumente se o atraso for grande)
 
 Cuidados (aprendidos na prática, 2026-11-12):
 - Feche o app antes: a câmera tem poucas sessões RTSP e o app já usa uma por canal.
@@ -35,6 +36,7 @@ quality = sys.argv[2] if len(sys.argv) > 2 else "sub"
 trials = int(sys.argv[3]) if len(sys.argv) > 3 else 6
 NOFF = bool(os.environ.get("NOFF"))
 FLOOR_S = 0.6  # piso medido (ffmpeg -fflags nobuffer) quando NOFF=1
+WINDOW_S = float(os.environ.get("MEDIR_JANELA", "5.0"))
 W, H = 64, 36
 
 cam = next(c for d, c in store.load_cameras().items() if d.endswith(suffix))
@@ -131,7 +133,7 @@ def run():
         time.sleep(4.0)
         t0 = time.monotonic()
         ptz.continuous_move(cam.ip, cam.user, cam.password, direction, 1)
-        time.sleep(5.0)
+        time.sleep(WINDOW_S)
         a = onset("app", t0)
         f = FLOOR_S if NOFF else onset("ff", t0)
         rows.append((a, f))
