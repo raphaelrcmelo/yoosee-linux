@@ -169,7 +169,8 @@ class YooseeClient:
         headers["x-iotvideo-signature"] = signature
         return headers
 
-    def login_account(self, email: str, password: str, language: str = "en"):
+    def login_account(self, email: str, password: str | None = None, language: str = "en",
+                      pwd_md5: str | None = None):
         """Login por e-mail (loginMode=email), formato do cliente PC.
 
         Capturado ao vivo via mitmproxy (interceptacao de rede transparente
@@ -196,7 +197,7 @@ class YooseeClient:
             "language": language,
             "loginMode": "email",
             "pkgName": PKG_NAME,
-            "pwd": hashlib.md5(password.encode("utf-8")).hexdigest(),
+            "pwd": pwd_md5 or hashlib.md5(password.encode("utf-8")).hexdigest(),
             "terminalOS": TERMINAL_OS_PC,
             "uniqueId": uuid.uuid4().hex,
         }

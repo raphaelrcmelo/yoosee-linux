@@ -67,6 +67,26 @@ Cada câmera abre por um de dois caminhos, decidido em runtime:
   com cauda de 1–2 passos ao soltar; mais rápido que isso a fila dela cresce e o
   movimento passa muito do ponto. Rejeições ficam em silêncio.
 
+## Interface
+
+- **Tema claro/escuro**: botão ☀/☾ na barra superior. As duas paletas moram em
+  `THEMES` (`app.py`) e o QSS inteiro é gerado por `build_style(tema)` — nada de
+  cor solta no código; o que o QSS não alcança (rich text do título, glifo do
+  botão) é atualizado por `_refresh_theme_widgets`. A escolha persiste em
+  `~/.config/yoosee-viewer/settings.json` (`store.get_setting`/`set_setting`).
+  Os tiles de vídeo continuam escuros nos dois temas de propósito.
+- **"Manter conectado"** (checkbox no login, ligado por padrão): guarda em
+  `Account.pwd_md5` o **md5 da senha** — exatamente o que a API de login recebe
+  como `pwd`, nunca a senha em claro (arquivos `0600`). Quando `listDevice`
+  responde sessão inválida, `_on_relogin` refaz o login com o hash, troca o
+  token e recarrega — no máximo 1x/min por conta (anti-loop: se nem o login
+  novo valer, abre o diálogo). "Sair desta conta" apaga tudo, hash incluído.
+- A velocidade do PTZ ao segurar está no teto físico do motor (ver seção de
+  PTZ): ~2 passos/s. Testado em 2026-11-12: velocity 2.0/8.0 no ContinuousMove
+  não muda o passo, e cadência de 0,4s/0,35s só infla a fila (cauda de até
+  3,5s depois de soltar). O que diferencia o app do Windows é a latência do
+  vídeo exibido, não o motor.
+
 ## Câmeras fora da rede (SDK oficial no Wine)
 
 Em vez de reimplementar o protocolo P2P proprietário (Tencent IoTVideo / Gwell), o

@@ -4,6 +4,7 @@
 Vídeo: RTSP direto da câmera via QMediaPlayer (backend FFmpeg do Qt).
 PTZ: ONVIF (ptz.py). Contas/lista de dispositivos: nuvem Yoosee (yoosee_api.py).
 """
+import hashlib
 import os
 import sys
 import threading
@@ -19,7 +20,7 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QStackedWidget, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
@@ -35,24 +36,41 @@ from yoosee_api import YooseeClient
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Paleta quente (mesma identidade do ícone do app: laranja -> rosa/vermelho),
-# em vez do cinza/azul neutro de antes.
-ACCENT = "#ff8a3d"       # laranja — ações principais, seleção, destaque
-ACCENT_2 = "#e8455f"     # rosa/vermelho — segundo tom da identidade, usado com moderação
-BG = "#201d1c"           # fundo quente (não cinza puro)
-BG_PANEL = "#2a2522"
-BG_RAISED = "#352e2a"
-BG_RAISED_HOVER = "#443a35"
-BORDER = "#453c37"
-TEXT = "#efe6e0"
-TEXT_MUTED = "#a89a92"
-STYLE = f"""
+# em duas variações: escura e clara. Os tiles de vídeo continuam escuros nas
+# duas — vídeo de câmera fica ilegível emoldurado em branco.
+THEMES = {
+    "dark": dict(
+        ACCENT="#ff8a3d", ACCENT_2="#e8455f", ON_ACCENT="#241310",
+        BG="#201d1c", BG_PANEL="#2a2522", BG_RAISED="#352e2a", BG_RAISED_HOVER="#443a35",
+        BORDER="#453c37", TEXT="#efe6e0", TEXT_MUTED="#a89a92", SEL_END="#ff6b55",
+        TILE="#0e0b0a", TILE_BORDER="#2b2522", TILE_HEADER="#262120",
+        PLACE_HI="#191412", PLACE_TEXT="#6d5f58",
+        CHIP_BG="rgba(255,138,61,0.14)", CHIP_TEXT="#ffb37d", ACCENT_SOFT="rgba(255,138,61,0.16)",
+        TOAST_BG="rgba(255,138,61,0.10)", TOAST_BORDER="rgba(255,138,61,0.30)", TOAST_TEXT="#ffc9a1",
+        CAPTION="#7a6c64", DPAD_CENTER="#5c524c",
+        DISABLED_TEXT="#4a413c", DISABLED_BORDER="#2e2724",
+    ),
+    "light": dict(
+        ACCENT="#e8601c", ACCENT_2="#d63a55", ON_ACCENT="#fff6ef",
+        BG="#f3eae2", BG_PANEL="#faf4ee", BG_RAISED="#eadfd4", BG_RAISED_HOVER="#dfcfc0",
+        BORDER="#d9c6b6", TEXT="#3a322c", TEXT_MUTED="#8d7c71", SEL_END="#e04a34",
+        TILE="#17120f", TILE_BORDER="#d4c1b1", TILE_HEADER="#2b2420",
+        PLACE_HI="#211b17", PLACE_TEXT="#8d7d73",
+        CHIP_BG="rgba(232,96,28,0.18)", CHIP_TEXT="#ffb98f", ACCENT_SOFT="rgba(232,96,28,0.14)",
+        TOAST_BG="rgba(232,96,28,0.09)", TOAST_BORDER="rgba(232,96,28,0.35)", TOAST_TEXT="#a54a12",
+        CAPTION="#9a8a7e", DPAD_CENTER="#a4948a",
+        DISABLED_TEXT="#c4b4a8", DISABLED_BORDER="#e3d5c8",
+    ),
+}
+
+STYLE_TEMPLATE = """
 QWidget {{ background: {BG}; color: {TEXT}; font-size: 13px; }}
 QLabel {{ background: transparent; }}
 QToolTip {{ background: {BG_RAISED}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 6px; padding: 5px 9px; }}
 
 #topbar {{ background: {BG_PANEL}; border-bottom: 1px solid {BORDER}; }}
 #logoBadge {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
-              color: #241310; font-size: 17px; font-weight: 900; border-radius: 9px; }}
+              color: {ON_ACCENT}; font-size: 17px; font-weight: 900; border-radius: 9px; }}
 #appTitle {{ font-size: 17px; font-weight: 700; letter-spacing: 0.5px; }}
 #accountBtn {{ background: transparent; border: 1px solid {BORDER}; border-radius: 16px;
                padding: 6px 14px; color: {TEXT_MUTED}; }}
@@ -67,18 +85,18 @@ QToolTip {{ background: {BG_RAISED}; color: {TEXT}; border: 1px solid {BORDER}; 
 QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{ padding: 10px 12px; margin: 3px 8px; border-radius: 10px; }}
 QListWidget::item:hover {{ background: {BG_RAISED}; }}
-QListWidget::item:selected {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT}, stop:1 #ff6b55);
-                              color: #2a1410; }}
+QListWidget::item:selected {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT}, stop:1 {SEL_END});
+                              color: {ON_ACCENT}; }}
 
-#channel {{ background: #0e0b0a; border: 2px solid #2b2522; border-radius: 12px; }}
+#channel {{ background: {TILE}; border: 2px solid {TILE_BORDER}; border-radius: 12px; }}
 #channel[selected="true"] {{ border: 2px solid {ACCENT}; }}
-#channelHeader {{ background: #262120; border-top-left-radius: 10px; border-top-right-radius: 10px; }}
-#chTitle {{ font-size: 12px; font-weight: 700; }}
-#stateChip {{ background: rgba(255,138,61,0.14); color: #ffb37d; border-radius: 8px;
+#channelHeader {{ background: {TILE_HEADER}; border-top-left-radius: 10px; border-top-right-radius: 10px; }}
+#chTitle {{ font-size: 12px; font-weight: 700; color: #efe6e0; }}
+#stateChip {{ background: {CHIP_BG}; color: {CHIP_TEXT}; border-radius: 8px;
               padding: 2px 9px; font-size: 11px; }}
 #placeholder {{ background: qradialgradient(cx:0.5, cy:0.45, radius:0.9, fx:0.5, fy:0.45,
-                                            stop:0 #191412, stop:1 #0e0b0a);
-                color: #6d5f58; font-size: 14px;
+                                            stop:0 {PLACE_HI}, stop:1 {TILE});
+                color: {PLACE_TEXT}; font-size: 14px;
                 border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
 
 QToolButton, QPushButton {{ background: {BG_RAISED}; border: none; border-radius: 10px;
@@ -86,50 +104,58 @@ QToolButton, QPushButton {{ background: {BG_RAISED}; border: none; border-radius
 QToolButton:hover, QPushButton:hover {{ background: {BG_RAISED_HOVER}; color: {ACCENT}; }}
 QToolButton:pressed, QPushButton:pressed {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
-    color: #241310; }}
+    color: {ON_ACCENT}; }}
 
 #bottombar {{ background: {BG_PANEL}; border-radius: 14px; border: 1px solid {BORDER}; }}
 #bottombar QWidget {{ background: transparent; }}
 QFrame#vsep {{ background: {BORDER}; min-width: 1px; }}
 #bottomBtn {{ background: transparent; font-size: 16px; font-weight: 600; border-radius: 12px; }}
 #bottomBtn:hover {{ background: {BG_RAISED}; color: {ACCENT}; }}
-#miniCaption {{ color: #7a6c64; font-size: 9px; letter-spacing: 2px; font-weight: 800; }}
-#toast {{ background: rgba(255,138,61,0.10); border: 1px solid rgba(255,138,61,0.30);
-          color: #ffc9a1; border-radius: 10px; padding: 7px 13px; }}
+#miniCaption {{ color: {CAPTION}; font-size: 9px; letter-spacing: 2px; font-weight: 800; }}
+#toast {{ background: {TOAST_BG}; border: 1px solid {TOAST_BORDER};
+          color: {TOAST_TEXT}; border-radius: 10px; padding: 7px 13px; }}
 
 #dpad {{ background: qradialgradient(cx:0.5, cy:0.42, radius:0.8, fx:0.5, fy:0.42,
                                      stop:0 {BG_RAISED_HOVER}, stop:1 {BG_RAISED});
          border: 1px solid {BORDER}; border-radius: 74px; }}
 #dpad QToolButton {{ background: transparent; border: none; font-size: 20px; padding: 2px;
                      border-radius: 23px; color: {TEXT_MUTED}; }}
-#dpad QToolButton:hover {{ background: rgba(255,138,61,0.18); color: {ACCENT}; }}
+#dpad QToolButton:hover {{ background: {ACCENT_SOFT}; color: {ACCENT}; }}
 #dpad QToolButton:pressed {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
-    color: #241310; }}
-#dpadCenter {{ color: #5c524c; font-size: 9px; font-weight: 800; letter-spacing: 2px; }}
+    color: {ON_ACCENT}; }}
+#dpadCenter {{ color: {DPAD_CENTER}; font-size: 9px; font-weight: 800; letter-spacing: 2px; }}
 
 #presetBtn {{ background: transparent; border: 1px dashed {BORDER}; border-radius: 12px;
               font-size: 15px; font-weight: 700; color: {TEXT_MUTED}; }}
-#presetBtn:hover {{ border: 1px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.08); }}
+#presetBtn:hover {{ border: 1px solid {ACCENT}; color: {ACCENT}; background: {ACCENT_SOFT}; }}
 #presetBtn[preset="here"] {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
-    border: none; color: #241310; }}
-#presetBtn:disabled {{ color: #4a413c; border-color: #2e2724; background: transparent; }}
+    border: none; color: {ON_ACCENT}; }}
+#presetBtn:disabled {{ color: {DISABLED_TEXT}; border-color: {DISABLED_BORDER}; background: transparent; }}
 
-#closeBtn {{ background: transparent; border: none; padding: 0 6px; color: {TEXT_MUTED}; }}
+#closeBtn {{ background: transparent; border: none; padding: 0 6px; color: #a89a92; }}
 #closeBtn:hover {{ color: {ACCENT_2}; background: transparent; }}
 QLineEdit, QComboBox {{ background: {BG}; border: 1px solid {BORDER}; border-radius: 9px;
                         padding: 8px 11px; selection-background-color: {ACCENT}; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT}; }}
+QCheckBox {{ background: transparent; spacing: 8px; }}
+QCheckBox::indicator {{ width: 17px; height: 17px; border: 1px solid {BORDER};
+                        border-radius: 5px; background: {BG}; }}
+QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
 QMenu {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 10px; padding: 6px; }}
 QMenu::item {{ padding: 8px 20px; border-radius: 7px; }}
-QMenu::item:selected {{ background: {ACCENT}; color: #241310; }}
+QMenu::item:selected {{ background: {ACCENT}; color: {ON_ACCENT}; }}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 4px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: {ACCENT}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 """
+
+
+def build_style(theme: str) -> str:
+    return STYLE_TEMPLATE.format(**THEMES[theme])
 
 
 class _Dispatcher(QObject):
@@ -170,6 +196,8 @@ class LoginDialog(QDialog):
         self.password = QLineEdit()
         self.password.setPlaceholderText("senha")
         self.password.setEchoMode(QLineEdit.Password)
+        self.remember = QCheckBox("Manter conectado (reconecta sozinho quando a sessão expirar)")
+        self.remember.setChecked(True)
         self.status = QLabel()
         self.status.setWordWrap(True)
 
@@ -184,6 +212,7 @@ class LoginDialog(QDialog):
         form.addRow("Senha", self.password)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(self.remember)
         layout.addWidget(self.status)
         layout.addWidget(self.buttons)
         self.setMinimumWidth(380)
@@ -208,7 +237,10 @@ class LoginDialog(QDialog):
             self.status.setText(f"Login recusado: {result.get('msg')}")
             return
         data = result["data"]
-        self.account = store.Account(email=email, access_id=str(data["accessId"]), access_token=data["accessToken"])
+        # guardamos o md5 (o que a API de login recebe como "pwd"), nunca a senha em claro
+        pwd_md5 = hashlib.md5(self.password.text().encode("utf-8")).hexdigest() if self.remember.isChecked() else ""
+        self.account = store.Account(email=email, access_id=str(data["accessId"]),
+                                     access_token=data["accessToken"], pwd_md5=pwd_md5)
         self.accept()
 
 
@@ -576,6 +608,10 @@ class MainWindow(QMainWindow):
         self._media_devices = QMediaDevices(self)
         self._media_devices.audioOutputsChanged.connect(self._follow_default_output)
         self.layout_size = 4
+        self.theme = store.get_setting("theme", "dark")
+        if self.theme not in THEMES:
+            self.theme = "dark"
+        self._relogin_last: dict[str, float] = {}  # access_id -> monotonic() da última reconexão
         self.selected: ChannelView | None = None
         self.focused: ChannelView | None = None
 
@@ -619,15 +655,33 @@ class MainWindow(QMainWindow):
         logo = QLabel("Y", objectName="logoBadge", alignment=Qt.AlignCenter)
         logo.setFixedSize(32, 32)
         h.addWidget(logo)
-        h.addWidget(QLabel(f'Câmeras <span style="color:{ACCENT};">Yoosee</span>', objectName="appTitle"))
+        self.title_label = QLabel(objectName="appTitle")
+        h.addWidget(self.title_label)
         h.addStretch()
+        self.theme_btn = QToolButton(objectName="ghostBtn")
+        self.theme_btn.clicked.connect(self.toggle_theme)
+        h.addWidget(self.theme_btn)
         self.account_btn = QToolButton(objectName="accountBtn")
         self.account_btn.setPopupMode(QToolButton.InstantPopup)
         self.account_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.account_menu = QMenu(self)
         self.account_btn.setMenu(self.account_menu)
         h.addWidget(self.account_btn)
+        self._refresh_theme_widgets()
         return bar
+
+    def toggle_theme(self):
+        self.theme = "light" if self.theme == "dark" else "dark"
+        store.set_setting("theme", self.theme)
+        QApplication.instance().setStyleSheet(build_style(self.theme))
+        self._refresh_theme_widgets()
+
+    def _refresh_theme_widgets(self):
+        """O que não dá pra trocar só pelo QSS: o rich text do título e o botão do tema."""
+        accent = THEMES[self.theme]["ACCENT"]
+        self.title_label.setText(f'Câmeras <span style="color:{accent};">Yoosee</span>')
+        self.theme_btn.setText("☀" if self.theme == "dark" else "☾")
+        self.theme_btn.setToolTip("Mudar para o tema claro" if self.theme == "dark" else "Mudar para o tema escuro")
 
     def _build_sidebar(self):
         side = QWidget(objectName="sidebar")
@@ -846,6 +900,14 @@ class MainWindow(QMainWindow):
             return
         resp, discovered = result
         if resp.get("code") != 0:
+            # "Manter conectado": renova a sessão sozinho com o hash guardado, no
+            # máximo 1x por minuto por conta (evita loop se nem o login novo valer).
+            if acc.pwd_md5 and time.monotonic() - self._relogin_last.get(acc.access_id, -999) > 60:
+                self._relogin_last[acc.access_id] = time.monotonic()
+                self.sidebar_status.setText("Sessão expirou — reconectando…")
+                run_async(lambda: YooseeClient().login_account(acc.email, pwd_md5=acc.pwd_md5).json(),
+                          lambda result: self._on_relogin(acc, result))
+                return
             self.sidebar_status.setText(f"Sessão inválida ({resp.get('msg')}). Entre novamente.")
             self.add_account(acc.email)
             return
@@ -859,6 +921,24 @@ class MainWindow(QMainWindow):
         self._fill_device_list()
         self.sidebar_status.setText("")
         self._autoplay()
+
+    def _on_relogin(self, acc, result):
+        if acc is not self.account:
+            return
+        data = result.get("data") if isinstance(result, dict) and result.get("code") == 0 else None
+        if not data:
+            motivo = result if isinstance(result, Exception) else (result or {}).get("msg", "?")
+            self.sidebar_status.setText(f"Reconexão automática falhou ({motivo}). Entre novamente.")
+            self.add_account(acc.email)
+            return
+        renewed = store.Account(email=acc.email, access_id=str(data["accessId"]),
+                                access_token=data["accessToken"], pwd_md5=acc.pwd_md5)
+        store.save_account(renewed)  # remove a conta antiga de mesmo e-mail
+        store.set_active_id(renewed.access_id)
+        self._relogin_last[renewed.access_id] = self._relogin_last.get(acc.access_id, 0)
+        self.account = renewed
+        self._rebuild_account_menu()
+        self.load_devices()
 
     def _fill_device_list(self):
         self.device_list.clear()
@@ -1223,7 +1303,8 @@ def main():
     global _dispatcher
     app = QApplication(sys.argv)
     app.setApplicationName("Câmeras Yoosee")
-    app.setStyleSheet(STYLE)
+    theme = store.get_setting("theme", "dark")
+    app.setStyleSheet(build_style(theme if theme in THEMES else "dark"))
     _dispatcher = _Dispatcher()
     win = MainWindow()
     win.show()

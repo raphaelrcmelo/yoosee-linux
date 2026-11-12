@@ -9,6 +9,7 @@ ACCOUNTS_DIR = os.path.join(CONFIG_DIR, "accounts")
 ACTIVE_FILE = os.path.join(CONFIG_DIR, "active_account")
 CAMERAS_FILE = os.path.join(CONFIG_DIR, "cameras.json")
 PTZ_FILE = os.path.join(CONFIG_DIR, "ptz_positions.json")
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 PTZ_SLOTS = ("1", "2", "3", "4")
 
 
@@ -17,6 +18,10 @@ class Account:
     email: str
     access_id: str
     access_token: str
+    # md5 da senha ("manter conectado"): é o que a API de login realmente recebe
+    # (pwd = md5 hex), então guardamos o hash — nunca a senha em claro. Vazio =
+    # usuário desmarcou "manter conectado"; sem reconexão automática.
+    pwd_md5: str = ""
 
 
 @dataclass
@@ -32,6 +37,25 @@ def _write_private(path: str, text: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(text)
+
+
+def get_setting(key: str, default=None):
+    try:
+        with open(SETTINGS_FILE) as f:
+            return json.load(f).get(key, default)
+    except (FileNotFoundError, ValueError):
+        return default
+
+
+def set_setting(key: str, value) -> None:
+    data = {}
+    try:
+        with open(SETTINGS_FILE) as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError):
+        pass
+    data[key] = value
+    _write_private(SETTINGS_FILE, json.dumps(data, indent=2))
 
 
 def account_path(access_id: str) -> str:
