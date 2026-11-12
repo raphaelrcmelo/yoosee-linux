@@ -53,6 +53,18 @@ Se o Yoosee oficial já estiver instalado no Wine/Bottles, basta `./install.sh -
 
    Câmeras sem essa configuração abrem pela nuvem, se você rodou `--cloud`.
 
+### Dicas
+
+- **Mover a câmera**: um clique nas setas dá um passo; **segurar** move continuamente.
+- **Posições (1 a 4)**: clique para ir até a posição salva; botão direito para salvar a
+  posição atual ou apagar. Valem na rede local e pela nuvem.
+- **Grade**: o programa lembra o layout (1/4/9), qual câmera está em cada quadro e HD/SD
+  de cada um. Clique duas vezes num quadro para ampliá-lo e de novo para voltar.
+- **Tema claro/escuro**: botão ☀/☾ no topo.
+- **Manter conectado**: na tela de entrada (ligado por padrão), o programa renova a
+  sessão sozinho quando ela expira, sem pedir a senha de novo. Guarda só o hash da senha,
+  nunca a senha em texto.
+
 Fotos ficam em `~/Pictures/yoosee-screenshots`. As contas e câmeras ficam em
 `~/.config/yoosee-viewer`, com permissão só para o seu usuário.
 
