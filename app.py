@@ -47,41 +47,88 @@ TEXT = "#efe6e0"
 TEXT_MUTED = "#a89a92"
 STYLE = f"""
 QWidget {{ background: {BG}; color: {TEXT}; font-size: 13px; }}
+QLabel {{ background: transparent; }}
+QToolTip {{ background: {BG_RAISED}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 6px; padding: 5px 9px; }}
+
 #topbar {{ background: {BG_PANEL}; border-bottom: 1px solid {BORDER}; }}
-#bottombar {{ background: {BG_PANEL}; border-radius: 10px; border: 1px solid {BORDER}; }}
+#logoBadge {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
+              color: #241310; font-size: 17px; font-weight: 900; border-radius: 9px; }}
+#appTitle {{ font-size: 17px; font-weight: 700; letter-spacing: 0.5px; }}
+#accountBtn {{ background: transparent; border: 1px solid {BORDER}; border-radius: 16px;
+               padding: 6px 14px; color: {TEXT_MUTED}; }}
+#accountBtn:hover {{ border-color: {ACCENT}; color: {TEXT}; background: {BG_RAISED}; }}
+#ghostBtn {{ background: transparent; border: none; border-radius: 14px; padding: 4px 9px;
+             color: {TEXT_MUTED}; font-size: 15px; }}
+#ghostBtn:hover {{ background: {BG_RAISED}; color: {ACCENT}; }}
+
 #sidebar {{ background: {BG_PANEL}; border-right: 1px solid {BORDER}; }}
-#sidebarHeader {{ background: transparent; padding: 10px 4px 6px 4px; font-weight: 600;
-                  color: {TEXT_MUTED}; letter-spacing: 1px; text-transform: uppercase; font-size: 11px; }}
-#appTitle {{ font-size: 22px; font-weight: 800; color: {ACCENT}; }}
+#sidebarHeader {{ background: transparent; padding: 12px 6px 4px 8px; }}
+#sidebarHeader QLabel {{ font-weight: 700; color: {TEXT_MUTED}; letter-spacing: 2px; font-size: 10px; }}
 QListWidget {{ background: transparent; border: none; outline: none; }}
-QListWidget::item {{ padding: 10px 10px; margin: 2px 6px; border-radius: 8px; }}
+QListWidget::item {{ padding: 10px 12px; margin: 3px 8px; border-radius: 10px; }}
 QListWidget::item:hover {{ background: {BG_RAISED}; }}
-QListWidget::item:selected {{ background: {ACCENT}; color: #1a1413; }}
-#channel {{ background: black; border: 2px solid {BG_PANEL}; border-radius: 6px; }}
+QListWidget::item:selected {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT}, stop:1 #ff6b55);
+                              color: #2a1410; }}
+
+#channel {{ background: #0e0b0a; border: 2px solid #2b2522; border-radius: 12px; }}
 #channel[selected="true"] {{ border: 2px solid {ACCENT}; }}
-#channelHeader {{ background: rgba(32,29,28,0.85); border-top-left-radius: 4px; border-top-right-radius: 4px; }}
-#channelHeader QLabel {{ background: transparent; font-size: 12px; }}
-#placeholder {{ background: #15100f; color: {TEXT_MUTED}; }}
-QToolButton, QPushButton {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 8px;
-                            padding: 7px 12px; color: {TEXT}; }}
-QToolButton:hover, QPushButton:hover {{ background: {BG_RAISED_HOVER}; border-color: {ACCENT}; }}
-QToolButton:pressed, QPushButton:pressed {{ background: {ACCENT}; color: #1a1413; border-color: {ACCENT}; }}
-#dpad {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 74px; }}
-#dpad QToolButton {{ background: transparent; border: none; font-size: 22px; padding: 2px; border-radius: 23px; }}
+#channelHeader {{ background: #262120; border-top-left-radius: 10px; border-top-right-radius: 10px; }}
+#chTitle {{ font-size: 12px; font-weight: 700; }}
+#stateChip {{ background: rgba(255,138,61,0.14); color: #ffb37d; border-radius: 8px;
+              padding: 2px 9px; font-size: 11px; }}
+#placeholder {{ background: qradialgradient(cx:0.5, cy:0.45, radius:0.9, fx:0.5, fy:0.45,
+                                            stop:0 #191412, stop:1 #0e0b0a);
+                color: #6d5f58; font-size: 14px;
+                border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
+
+QToolButton, QPushButton {{ background: {BG_RAISED}; border: none; border-radius: 10px;
+                            padding: 8px 14px; color: {TEXT}; }}
+QToolButton:hover, QPushButton:hover {{ background: {BG_RAISED_HOVER}; color: {ACCENT}; }}
+QToolButton:pressed, QPushButton:pressed {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
+    color: #241310; }}
+
+#bottombar {{ background: {BG_PANEL}; border-radius: 14px; border: 1px solid {BORDER}; }}
+#bottombar QWidget {{ background: transparent; }}
+QFrame#vsep {{ background: {BORDER}; min-width: 1px; }}
+#bottomBtn {{ background: transparent; font-size: 16px; font-weight: 600; border-radius: 12px; }}
+#bottomBtn:hover {{ background: {BG_RAISED}; color: {ACCENT}; }}
+#miniCaption {{ color: #7a6c64; font-size: 9px; letter-spacing: 2px; font-weight: 800; }}
+#toast {{ background: rgba(255,138,61,0.10); border: 1px solid rgba(255,138,61,0.30);
+          color: #ffc9a1; border-radius: 10px; padding: 7px 13px; }}
+
+#dpad {{ background: qradialgradient(cx:0.5, cy:0.42, radius:0.8, fx:0.5, fy:0.42,
+                                     stop:0 {BG_RAISED_HOVER}, stop:1 {BG_RAISED});
+         border: 1px solid {BORDER}; border-radius: 74px; }}
+#dpad QToolButton {{ background: transparent; border: none; font-size: 20px; padding: 2px;
+                     border-radius: 23px; color: {TEXT_MUTED}; }}
 #dpad QToolButton:hover {{ background: rgba(255,138,61,0.18); color: {ACCENT}; }}
-#dpad QToolButton:pressed {{ background: {ACCENT}; color: #1a1413; }}
-#presetBtn {{ background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 10px;
-              font-size: 16px; font-weight: 700; color: {TEXT_MUTED}; }}
-#presetBtn[preset="here"] {{ border: 2px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.12); }}
-#bottomBtn {{ font-size: 15px; font-weight: 600; }}
-#presetBtn:disabled {{ color: #5a504a; border-color: #352e2b; background: {BG_PANEL}; }}
-#closeBtn {{ background: transparent; border: none; padding: 0 4px; color: {TEXT_MUTED}; }}
+#dpad QToolButton:pressed {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
+    color: #241310; }}
+#dpadCenter {{ color: #5c524c; font-size: 9px; font-weight: 800; letter-spacing: 2px; }}
+
+#presetBtn {{ background: transparent; border: 1px dashed {BORDER}; border-radius: 12px;
+              font-size: 15px; font-weight: 700; color: {TEXT_MUTED}; }}
+#presetBtn:hover {{ border: 1px solid {ACCENT}; color: {ACCENT}; background: rgba(255,138,61,0.08); }}
+#presetBtn[preset="here"] {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {ACCENT_2});
+    border: none; color: #241310; }}
+#presetBtn:disabled {{ color: #4a413c; border-color: #2e2724; background: transparent; }}
+
+#closeBtn {{ background: transparent; border: none; padding: 0 6px; color: {TEXT_MUTED}; }}
 #closeBtn:hover {{ color: {ACCENT_2}; background: transparent; }}
-QLineEdit, QComboBox {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 8px; padding: 7px 10px; }}
+QLineEdit, QComboBox {{ background: {BG}; border: 1px solid {BORDER}; border-radius: 9px;
+                        padding: 8px 11px; selection-background-color: {ACCENT}; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT}; }}
-QMenu {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 8px; padding: 4px; }}
-QMenu::item {{ padding: 7px 18px; border-radius: 6px; }}
-QMenu::item:selected {{ background: {ACCENT}; color: #1a1413; }}
+QMenu {{ background: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 10px; padding: 6px; }}
+QMenu::item {{ padding: 8px 20px; border-radius: 7px; }}
+QMenu::item:selected {{ background: {ACCENT}; color: #241310; }}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 4px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {ACCENT}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
 """
 
 
@@ -247,13 +294,14 @@ class ChannelView(QFrame):
         self.quality = "main"
 
         header = QWidget(objectName="channelHeader")
-        self.title = QLabel()
-        self.state = QLabel()
+        self.title = QLabel(objectName="chTitle")
+        self.state = ChipLabel(objectName="stateChip")
         close_btn = QToolButton(objectName="closeBtn", text="✕")
         close_btn.setToolTip("Fechar canal")
         close_btn.clicked.connect(lambda: self.closed.emit(self))
         h = QHBoxLayout(header)
-        h.setContentsMargins(6, 2, 2, 2)
+        h.setContentsMargins(10, 5, 6, 5)
+        h.setSpacing(6)
         h.addWidget(self.title)
         h.addStretch()
         h.addWidget(self.state)
@@ -452,6 +500,19 @@ class ChannelView(QFrame):
             self.placeholder.setText(f"{self.device['remarkName']}\n\nFalha no vídeo: {message}")
 
 
+class ChipLabel(QLabel):
+    """QLabel que some quando o texto está vazio — pra chips e toasts não deixarem
+    um "pílula" vazia ocupando espaço na tela."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setVisible(bool(self.text()))
+
+    def setText(self, text: str):
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class DPad(QFrame):
     """Emite `moved(direção, é_repetição)` ao clicar, e repetidamente enquanto o
     botão fica pressionado — a câmera não tem um comando de "parar" que funcione
@@ -460,7 +521,7 @@ class DPad(QFrame):
     moved = Signal(str, bool)
     SIZE = 148
     BTN_SIZE = 46
-    REPEAT_MS = 100  # só uma tentativa; quem decide se aceita é o lado que já sabe o cooldown real
+    REPEAT_MS = 50  # só tentativas; quem decide se aceita é o lado que já sabe o cooldown real
 
     def __init__(self):
         super().__init__(objectName="dpad")
@@ -482,6 +543,7 @@ class DPad(QFrame):
             btn.pressed.connect(lambda d=direction: self._start(d))
             btn.released.connect(self._stop)
             grid.addWidget(btn, row, col, Qt.AlignCenter)
+        grid.addWidget(QLabel("PTZ", objectName="dpadCenter", alignment=Qt.AlignCenter), 1, 1, Qt.AlignCenter)
 
     def _start(self, direction: str):
         self._held = direction
@@ -527,12 +589,12 @@ class MainWindow(QMainWindow):
         body.setSpacing(0)
         body.addWidget(self._build_sidebar())
         right = QVBoxLayout()
-        right.setContentsMargins(0, 0, 8, 8)
-        right.setSpacing(8)
+        right.setContentsMargins(10, 10, 10, 10)
+        right.setSpacing(10)
         self.grid_host = QWidget()
         self.grid = QGridLayout(self.grid_host)
         self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setSpacing(0)
+        self.grid.setSpacing(10)
         right.addWidget(self.grid_host, 1)
         right.addWidget(self._build_bottombar())
         body.addLayout(right, 1)
@@ -552,13 +614,16 @@ class MainWindow(QMainWindow):
     def _build_topbar(self):
         bar = QWidget(objectName="topbar")
         h = QHBoxLayout(bar)
-        h.setContentsMargins(16, 8, 16, 8)
-        h.addWidget(QLabel("Câmeras Yoosee", objectName="appTitle"))
+        h.setContentsMargins(14, 9, 14, 9)
+        h.setSpacing(10)
+        logo = QLabel("Y", objectName="logoBadge", alignment=Qt.AlignCenter)
+        logo.setFixedSize(32, 32)
+        h.addWidget(logo)
+        h.addWidget(QLabel(f'Câmeras <span style="color:{ACCENT};">Yoosee</span>', objectName="appTitle"))
         h.addStretch()
-        self.account_btn = QToolButton()
+        self.account_btn = QToolButton(objectName="accountBtn")
         self.account_btn.setPopupMode(QToolButton.InstantPopup)
-        self.account_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.account_btn.setIcon(QIcon.fromTheme("avatar-default", self.style().standardIcon(QStyle.SP_DirHomeIcon)))
+        self.account_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.account_menu = QMenu(self)
         self.account_btn.setMenu(self.account_menu)
         h.addWidget(self.account_btn)
@@ -566,16 +631,16 @@ class MainWindow(QMainWindow):
 
     def _build_sidebar(self):
         side = QWidget(objectName="sidebar")
-        side.setFixedWidth(260)
+        side.setFixedWidth(272)
         v = QVBoxLayout(side)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
         header = QWidget(objectName="sidebarHeader")
         hh = QHBoxLayout(header)
         hh.setContentsMargins(8, 4, 4, 4)
-        hh.addWidget(QLabel("Dispositivos"))
+        hh.addWidget(QLabel("DISPOSITIVOS"))
         hh.addStretch()
-        refresh = QToolButton(text="⟳")
+        refresh = QToolButton(text="⟳", objectName="ghostBtn")
         refresh.setToolTip("Atualizar lista")
         refresh.clicked.connect(self.load_devices)
         hh.addWidget(refresh)
@@ -601,17 +666,25 @@ class MainWindow(QMainWindow):
         btn.setMinimumSize(self.BOTTOMBAR_BTN, self.BOTTOMBAR_BTN)
         return btn
 
+    @staticmethod
+    def _vsep() -> QFrame:
+        line = QFrame(objectName="vsep")
+        line.setFixedWidth(1)
+        line.setFixedHeight(64)
+        return line
+
     def _build_bottombar(self):
         bar = QWidget(objectName="bottombar")
         h = QHBoxLayout(bar)
-        h.setContentsMargins(14, 10, 14, 10)
+        h.setContentsMargins(16, 10, 16, 10)
         h.setSpacing(12)
         st = self.style()
 
-        stop = self._bottombar_btn(icon=st.standardIcon(QStyle.SP_MediaStop))
+        stop = self._bottombar_btn(text="■")
         stop.setToolTip("Parar canal selecionado")
         stop.clicked.connect(self.stop_selected)
         h.addWidget(stop)
+        h.addWidget(self._vsep())
 
         self.dpad = DPad()
         self.dpad.moved.connect(self.ptz_move)
@@ -619,8 +692,13 @@ class MainWindow(QMainWindow):
 
         self.preset_btns: dict[str, QToolButton] = {}
         presets = QWidget()
-        pg = QGridLayout(presets)
-        pg.setContentsMargins(10, 0, 0, 0)
+        pv = QVBoxLayout(presets)
+        pv.setContentsMargins(8, 2, 2, 2)
+        pv.setSpacing(6)
+        pv.addWidget(QLabel("POSIÇÕES", objectName="miniCaption", alignment=Qt.AlignHCenter))
+        grid_holder = QWidget()
+        pg = QGridLayout(grid_holder)
+        pg.setContentsMargins(0, 0, 0, 0)
         pg.setSpacing(6)
         for i, slot in enumerate(store.PTZ_SLOTS):
             btn = QToolButton(text=slot, objectName="presetBtn")
@@ -633,16 +711,19 @@ class MainWindow(QMainWindow):
             btn.customContextMenuRequested.connect(lambda pos, s=slot, b=btn: self._preset_menu(s, b))
             self.preset_btns[slot] = btn
             pg.addWidget(btn, i // 2, i % 2)
+        pv.addWidget(grid_holder)
         h.addWidget(presets)
+        h.addWidget(self._vsep())
 
         shot = self._bottombar_btn(text="Foto")
         shot.setToolTip("Capturar imagem do canal selecionado")
         shot.clicked.connect(self.screenshot)
         h.addWidget(shot)
 
-        self.message = QLabel()
-        h.addWidget(self.message)
+        self.message = ChipLabel(objectName="toast")
+        h.addWidget(self.message, 0, Qt.AlignVCenter)
         h.addStretch()
+        h.addWidget(self._vsep())
 
         self.mute_btn = self._bottombar_btn(icon=st.standardIcon(QStyle.SP_MediaVolumeMuted))
         self.mute_btn.setToolTip("Som do canal selecionado")
@@ -659,7 +740,7 @@ class MainWindow(QMainWindow):
         self.layout_btn.clicked.connect(self.cycle_layout)
         h.addWidget(self.layout_btn)
 
-        full = self._bottombar_btn(icon=QIcon.fromTheme("view-fullscreen", st.standardIcon(QStyle.SP_TitleBarMaxButton)))
+        full = self._bottombar_btn(text="⛶")
         full.setToolTip("Tela cheia")
         full.clicked.connect(lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
         h.addWidget(full)
@@ -911,19 +992,21 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(3000, lambda: self.message.text() == text and self.message.setText(""))
 
     def ptz_move(self, direction: str, is_repeat: bool = False):
-        """Um passo do motor, igual a um clique no app oficial do Windows (lá não há
-        "segurar": cada clique manda um comando). Segurar o botão aqui só repete o
-        passo no ritmo máximo que a câmera executa (ptz.STEP_INTERVAL) — medido no
-        vídeo: mais rápido que isso ela enfileira e continua girando depois de soltar.
-        `is_repeat`: disparo automático do DPad; rejeição por ritmo é normal e fica
-        em silêncio. Posição: 1 passo aceito = 1 unidade, na rede local e na nuvem."""
+        """Um passo do motor por comando, igual a um clique no app oficial do Windows.
+        Segurar o botão repete o passo a cada ptz.HOLD_INTERVAL (0,5s): nesse ritmo a
+        câmera emenda os passos num movimento quase contínuo, sobrando no máximo 1-2
+        passos de "cauda" ao soltar (medido no vídeo — ver ptz.py). Presets usam o
+        STEP_INTERVAL folgado (0,8s), porque lá a contagem exata importa mais que a
+        velocidade. `is_repeat`: disparo automático do DPad; rejeição por ritmo é
+        normal e fica em silêncio. Posição: 1 passo aceito = 1 unidade, nos dois
+        caminhos."""
         ch = self.selected
         if ch and ch.remote:
             dev_id = ch.device["devId"]
             now = time.monotonic()
             # a nuvem não tem trava própria (a rede local usa PtzController); mesmo
             # motor, mesmo limite de ritmo.
-            if now - self._cloud_ptz_last.get(dev_id, 0.0) < ptz.STEP_INTERVAL:
+            if now - self._cloud_ptz_last.get(dev_id, 0.0) < ptz.HOLD_INTERVAL:
                 return
             if not ch.remote.ptz(direction):
                 if not is_repeat:
@@ -951,7 +1034,7 @@ class MainWindow(QMainWindow):
 
         # clique avulso rejeitado: silencioso também — o passo anterior ainda está em
         # andamento e dura menos de 1s, um aviso só atrapalharia cliques rápidos.
-        ctrl.move(direction, on_result)
+        ctrl.move(direction, on_result, interval=ptz.HOLD_INTERVAL)
 
     # ---- predefinições de PTZ ----
     #

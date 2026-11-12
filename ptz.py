@@ -8,9 +8,11 @@ movimento para via <Timeout>; velocidade abaixo de 1.0 não move.
 Medido no vídeo (ffmpeg scene score, 2026-11-05): cada ContinuousMove vira UM
 passo fixo do motor (~0.3s de giro), não importa o <Timeout> declarado (1s e 3s
 dão o mesmo passo). A câmera ENFILEIRA comandos e executa ~1 passo a cada
-0.7-0.8s — mandar mais rápido só acumula fila e a câmera continua girando
-segundos depois de soltar o botão. É o mesmo passo que o app oficial do Windows
-manda por clique (ele não tem "segurar": só onPtz*Click, sem setAutoRepeat).
+0.7-0.8s quando chegam espaçados; a cada 0.5s ela EMENDA os passos num movimento
+quase contínuo (blocos medidos de até 1.6s), sobrando só 1-2 passos de "cauda"
+depois do último comando; a cada 0.3s a fila dispara e ela segue girando ~6s
+depois de parar de mandar. É o mesmo passo que o app oficial do Windows manda
+por clique (ele não tem "segurar": só onPtz*Click, sem setAutoRepeat).
 """
 import base64
 import datetime
@@ -23,7 +25,8 @@ import time
 ONVIF_PORT = 5000
 PROFILE_TOKEN = "IPCProfilesToken0"
 STEP_SECONDS = 1  # <Timeout> enviado; não muda o tamanho do passo (ver acima)
-STEP_INTERVAL = 0.8  # s entre passos: o ritmo máximo que a câmera executa sem enfileirar
+STEP_INTERVAL = 0.8  # s entre passos espaçados (presets): fila vazia, contagem 1:1 confiável
+HOLD_INTERVAL = 0.5  # s entre passos ao SEGURAR: a câmera emenda em movimento quase contínuo
 DIRECTIONS = {
     "left": (-1.0, 0.0),
     "right": (1.0, 0.0),
@@ -91,8 +94,9 @@ def continuous_move(ip: str, user: str, password: str, direction: str, seconds: 
 
 
 class PtzController:
-    """Um por câmera. Aceita no máximo 1 passo a cada STEP_INTERVAL: mais rápido
-    que isso a câmera só enfileira e o movimento continua depois de soltar."""
+    """Um por câmera. Aceita no máximo 1 passo a cada `interval` (ver as medições
+    no topo do arquivo): mais rápido que isso a fila da câmera cresce e o
+    movimento continua muito depois de soltar o botão."""
 
     def __init__(self, ip: str, user: str, password: str):
         self.ip = ip
@@ -101,12 +105,12 @@ class PtzController:
         self._busy_until = 0.0
         self._lock = threading.Lock()
 
-    def move(self, direction: str, on_result=None) -> bool:
+    def move(self, direction: str, on_result=None, interval: float = STEP_INTERVAL) -> bool:
         with self._lock:
             now = time.monotonic()
             if now < self._busy_until:
                 return False
-            self._busy_until = now + STEP_INTERVAL
+            self._busy_until = now + interval
 
         def worker():
             try:

@@ -49,18 +49,23 @@ Cada câmera abre por um de dois caminhos, decidido em runtime:
   - **Cada `ContinuousMove` é UM passo fixo do motor (~0,3 s de giro), qualquer que seja
     o `<Timeout>`** — medido no vídeo (ffmpeg `scene_score` no RTSP, que só aceita
     transporte UDP): Timeout de 1 s e de 3 s dão o mesmo passo. A câmera **enfileira**
-    comandos e executa ~1 passo a cada 0,7–0,8 s; mandando a cada 0,3 s ela continuou
-    girando ~6 s depois do último comando. Por isso `ptz.STEP_INTERVAL = 0.8`.
+    comandos e executa ~1 passo a cada 0,7–0,8 s quando chegam espaçados; a cada
+    0,5 s ela **emenda** os passos num movimento quase contínuo (blocos medidos de
+    até 1,6 s, cauda de 1–2 passos ao parar de mandar — reconfirmado 2026-11-12);
+    a cada 0,3 s a fila dispara e ela continuou girando ~6 s depois do último
+    comando. Por isso `ptz.HOLD_INTERVAL = 0.5` (segurar/cliques manuais) e
+    `ptz.STEP_INTERVAL = 0.8` (presets, onde a contagem 1:1 importa mais).
   - O app oficial do Windows faz o mesmo: 1 clique = 1 comando (`{"type":2,"data":{"dir":N}}`),
     só tem sinais `onPtz*Click`, sem `setAutoRepeat` nem "segurar".
 - **Acesso remoto nativo**: ONVIF/RTSP só alcançam a câmera na LAN; de fora, via VPN
   (ex.: WireGuard) para chegar ao IP da câmera.
 - **Segurar o botão do D-pad**: como não há `Stop` que funcione, "mover continuamente"
-  é aproximado por `DPad` tentando um passo a cada 100ms enquanto o botão fica
-  pressionado; `MainWindow.ptz_move` só aceita um passo a cada `ptz.STEP_INTERVAL`
+  é aproximado por `DPad` tentando um passo a cada 50ms enquanto o botão fica
+  pressionado; `MainWindow.ptz_move` só aceita um passo a cada `ptz.HOLD_INTERVAL`
   (trava de `PtzController` na rede local, `_cloud_ptz_last` pela nuvem — mesmo motor,
-  mesmo limite). Esse é o máximo que a câmera anda: mais rápido só enche a fila dela
-  e o movimento passa do ponto depois de soltar. Rejeições ficam em silêncio.
+  mesmo limite). Nesse ritmo a câmera emenda os passos em movimento quase contínuo,
+  com cauda de 1–2 passos ao soltar; mais rápido que isso a fila dela cresce e o
+  movimento passa muito do ponto. Rejeições ficam em silêncio.
 
 ## Câmeras fora da rede (SDK oficial no Wine)
 
