@@ -288,6 +288,22 @@ Criado pelo `install.sh --cloud` em `~/.local/share/yoosee-viewer/`:
 - `sdk/` — `IotVideoSDK.dll` + runtime MSVC, extraídos de uma instalação oficial do
   Yoosee ou do instalador `.exe`. **Essas DLLs não são redistribuídas** com o projeto.
 
+## Sessão vencida na nuvem (`over_data_login`)
+
+Medido em 2026-11-17: o `access_token` salvo venceu depois de ~4–5 dias. A API REST
+(`listDevice`) **continua aceitando o token vencido**; só o servidor P2P recusa. Antes, o
+player ficava em `STOPPED` e o canal terminava em `ERROR connect` após ~32 s, sem dizer o
+motivo (todas as câmeras, inclusive as que só existem na nuvem).
+
+- A ponte registra `addLogPrintfListener` no SDK (um `std::function` MSVC falso, montado
+  em `make_function`) e, ao ver `over_data_login` no log, emite `* ERROR login_expired` e
+  encerra. A próxima ponte lê o token novo do arquivo da conta.
+- O app (`_on_login_expired`) renova o login com o `pwd_md5` ("Manter conectado") e reabre
+  os quadros marcados `awaiting_login`; sem o hash, pede o login de novo.
+- Diagnóstico: `YOOSEE_BRIDGE_LOG=/caminho/arquivo` grava o log interno do SDK (linhas
+  `SDK <nível> ...`). **Esse log pode conter o token**: arquivo `600`, apagar depois.
+  `YOOSEE_WINEDEBUG=+winsock` mostra as chamadas de rede do Wine.
+
 ## Empacotamento Flatpak (`packaging/flatpak/`)
 
 Alternativa ao `install.sh`: um Flatpak **auto-contido**, com o Wine embutido

@@ -14,7 +14,8 @@ stdin (uma linha por comando; EOF encerra):
     ptz <canal> <0-3>
 stdout: logs do próprio SDK (incluem o access_token em claro) -> o lado Linux descarta.
 stderr: "<canal> STATE playing|video|audio <8 bytes hex>|reconnecting", "<canal> ERROR <msg>", "<canal> PTZ <rc>",
-        "* ERROR <msg>" para falhas da conta inteira.
+        "* ERROR <msg>" para falhas da conta inteira ("* ERROR login_expired": token vencido,
+        a ponte encerra logo depois).
 """
 import ctypes
 import json
@@ -85,6 +86,60 @@ play = fn("?play@IoTVideoPlayer@@QEAAXXZ", None, c_void_p)
 stop = fn("?stop@IoTVideoPlayer@@QEAAXXZ", None, c_void_p)
 get_state = fn("?getPlayState@IoTVideoPlayer@@QEAAHXZ", c_int, c_void_p)
 send_user_data = fn("?sendUserData@IoTVideoPlayer@@QEAAHPEAEH@Z", c_int, c_void_p, c_char_p, c_int)
+
+
+# ---- std::function (ABI MSVC x64) para os listeners do SDK ----
+# Layout de std::function<...>: 64 bytes, ponteiro para o "_Func_base" no último slot (+56).
+# vtable do _Func_base: _Copy, _Move, _Do_call, _Target_type, _Delete_this, _Get. Os nossos
+# vivem para sempre (o SDK guarda cópias), então _Copy/_Move devolvem o mesmo objeto e
+# _Delete_this não faz nada.
+_listener_refs = []
+
+
+def make_function(call_type, py_call) -> int:
+    impl = crt.calloc(1, 16)
+    copy = CFUNCTYPE(c_void_p, c_void_p, c_void_p)(lambda this, where: impl)
+    noop = CFUNCTYPE(c_void_p, c_void_p, c_void_p)(lambda this, arg: 0)
+    get = CFUNCTYPE(c_void_p, c_void_p)(lambda this: impl)
+    do_call = call_type(py_call)
+    vtable = (c_void_p * 6)(*[ctypes.cast(f, c_void_p).value for f in (copy, copy, do_call, noop, noop, get)])
+    c_void_p.from_address(impl).value = ctypes.addressof(vtable)
+    _listener_refs.extend([copy, noop, get, do_call, vtable])
+    obj = crt.calloc(1, 64)
+    c_void_p.from_address(obj + 56).value = impl
+    return obj
+
+
+def read_std_string(ptr: int) -> str:
+    size = ctypes.c_size_t.from_address(ptr + 16).value
+    capacity = ctypes.c_size_t.from_address(ptr + 24).value
+    data = c_void_p.from_address(ptr).value if capacity > 15 else ptr
+    return ctypes.string_at(data, min(size, 4000)).decode(errors="replace")
+
+
+add_log_listener = fn("?addLogPrintfListener@IoTVideoSdk@@QEAAXV?$function@$$A6AXHV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z@std@@@Z",
+                      None, c_void_p, c_void_p)
+SDK_LOG_TO_STDERR = bool(os.environ.get("YOOSEE_BRIDGE_LOG"))  # diagnóstico; o log pode trazer o token
+login_expired = threading.Event()
+
+
+def on_sdk_log(_this, level_ptr, text_ptr):
+    text = read_std_string(text_ptr)
+    if SDK_LOG_TO_STDERR:
+        with out_lock:
+            sys.stderr.write(f"SDK {ctypes.c_int.from_address(level_ptr).value} {text}\n")
+            sys.stderr.flush()
+    # O servidor P2P recusa um access_token vencido com "over_data_login", mesmo que a API
+    # REST (lista de câmeras) ainda o aceite. Sem isso o player só fica em STOPPED e o canal
+    # termina em "ERROR connect" sem dizer o motivo. Encerra a ponte: a próxima, aberta após
+    # o novo login, lê o token renovado do arquivo da conta.
+    if ("over_data_login" in text or "over date login" in text) and not login_expired.is_set():
+        login_expired.set()
+        report("*", "ERROR login_expired")
+        os._exit(3)
+
+
+add_log_listener(get_instance(), make_function(CFUNCTYPE(None, c_void_p, c_void_p, c_void_p), on_sdk_log))
 
 sdk_lock = threading.RLock()  # serializa as chamadas de controle dos players
 

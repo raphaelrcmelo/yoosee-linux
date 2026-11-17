@@ -474,6 +474,7 @@ class ChannelView(QFrame):
     double_clicked = Signal(object)
     closed = Signal(object)
     message = Signal(str)
+    login_expired = Signal()  # servidor P2P recusou o token: a janela renova o login e reabre
 
     def __init__(self, index: int):
         super().__init__()
@@ -483,6 +484,7 @@ class ChannelView(QFrame):
         self.lan: store.LanCamera | None = None
         self.account_file: str | None = None
         self.remote: p2p.RemoteStream | None = None
+        self.awaiting_login = False
         self._bridge_retries = 0
         self.quality = "main"
 
@@ -650,6 +652,16 @@ class ChannelView(QFrame):
             self.audio_player.play()
         elif event == "STATE reconnecting":
             self.state.setText("reconectando…")
+        elif event == "ERROR login_expired":
+            # a ponte já encerrou; esquece o stream (o "ERROR bridge" que vem atrás é ignorado)
+            # e espera a janela renovar o login para reabrir este quadro
+            stream.stop()
+            self.remote = None
+            self.awaiting_login = True
+            self.state.setText("renovando login…")
+            self.placeholder.setText(f"{self.device['remarkName']}\n\nSessão da nuvem expirou — renovando login…")
+            self.body.setCurrentWidget(self.placeholder)
+            self.login_expired.emit()
         elif event == "ERROR bridge" and self._bridge_retries < 3:
             # o processo da ponte caiu (raro, corrida dentro do SDK): reabre numa ponte nova
             self._bridge_retries += 1
@@ -821,6 +833,8 @@ class MainWindow(QMainWindow):
         if self.theme not in THEMES:
             self.theme = "dark"
         self._relogin_last: dict[str, float] = {}  # access_id -> monotonic() da última reconexão
+        self._relogin_running: set[str] = set()  # access_ids com login em andamento
+        self._login_prompted = False  # já pediu login manual por sessão expirada
         self.slots: dict[int, dict] = {}   # arrumação da grade: quadro -> {"devId", "quality"} (ver _save_grid)
         self._grid_key: str | None = None  # conta cuja arrumação já foi restaurada nesta sessão
         self.selected: ChannelView | None = None
@@ -853,6 +867,7 @@ class MainWindow(QMainWindow):
             ch.double_clicked.connect(self.toggle_focus)
             ch.closed.connect(self._on_channel_closed)
             ch.message.connect(self._flash)
+            ch.login_expired.connect(self._on_login_expired)
         self.apply_layout()
         self.select_channel(self.channels[0])
 
@@ -1064,6 +1079,7 @@ class MainWindow(QMainWindow):
 
     def switch_account(self, account: store.Account):
         self.account = account
+        self._login_prompted = False
         store.set_active_id(account.access_id)
         for ch in self.channels:
             ch.stop()
@@ -1115,14 +1131,9 @@ class MainWindow(QMainWindow):
         if resp.get("code") != 0:
             # "Manter conectado": renova a sessão sozinho com o hash guardado, no
             # máximo 1x por minuto por conta (evita loop se nem o login novo valer).
-            if acc.pwd_md5 and time.monotonic() - self._relogin_last.get(acc.access_id, -999) > 60:
-                self._relogin_last[acc.access_id] = time.monotonic()
-                self.sidebar_status.setText("Sessão expirou — reconectando…")
-                run_async(lambda: YooseeClient().login_account(acc.email, pwd_md5=acc.pwd_md5).json(),
-                          lambda result: self._on_relogin(acc, result))
-                return
-            self.sidebar_status.setText(f"Sessão inválida ({resp.get('msg')}). Entre novamente.")
-            self.add_account(acc.email)
+            if not self._start_relogin(acc):
+                self.sidebar_status.setText(f"Sessão inválida ({resp.get('msg')}). Entre novamente.")
+                self.add_account(acc.email)
             return
         for dev_id, ip in discovered.items():
             known = self.cameras.get(dev_id)
@@ -1140,7 +1151,46 @@ class MainWindow(QMainWindow):
             self._grid_key = key
             self._autoplay()
 
+    def _start_relogin(self, acc) -> bool:
+        """"Manter conectado": renova a sessão com o hash guardado, no máximo 1x por minuto
+        por conta (evita loop se nem o login novo valer). False = não dá para renovar sozinho."""
+        if acc.access_id in self._relogin_running:
+            return True
+        if not acc.pwd_md5 or time.monotonic() - self._relogin_last.get(acc.access_id, -999) <= 60:
+            return False
+        self._relogin_last[acc.access_id] = time.monotonic()
+        self._relogin_running.add(acc.access_id)
+        self.sidebar_status.setText("Sessão expirou — reconectando…")
+        run_async(lambda: YooseeClient().login_account(acc.email, pwd_md5=acc.pwd_md5).json(),
+                  lambda result: self._on_relogin(acc, result))
+        return True
+
+    def _on_login_expired(self):
+        """O servidor de vídeo (P2P) recusou o token. A API REST pode continuar aceitando o mesmo
+        token, então isso só é percebido aqui, ao abrir uma câmera pela nuvem."""
+        acc = self.account
+        if not acc or self._start_relogin(acc):
+            return
+        if not self._login_prompted:
+            self._login_prompted = True
+            self.sidebar_status.setText("Sessão da nuvem expirou. Entre novamente "
+                                        "(marque \"Manter conectado\" para renovar sozinho).")
+            self.add_account(acc.email)
+            if self.account is acc:  # cancelou o login: explica no quadro em vez de "renovando…"
+                for ch in self.channels:
+                    if ch.awaiting_login and ch.device:
+                        ch.state.setText("erro")
+                        ch.placeholder.setText(f"{ch.device['remarkName']}\n\nSessão da nuvem expirou. "
+                                               "Entre novamente pelo menu da conta.")
+
+    def _reopen_awaiting_login(self):
+        for ch in self.channels:
+            if ch.awaiting_login and ch.device:
+                ch.awaiting_login = False
+                ch.open(ch.device, self.cameras.get(ch.device["devId"]), self._account_file())
+
     def _on_relogin(self, acc, result):
+        self._relogin_running.discard(acc.access_id)
         if acc is not self.account:
             return
         data = result.get("data") if isinstance(result, dict) and result.get("code") == 0 else None
@@ -1156,6 +1206,7 @@ class MainWindow(QMainWindow):
         self._relogin_last[renewed.access_id] = self._relogin_last.get(acc.access_id, 0)
         self.account = renewed
         self._rebuild_account_menu()
+        self._reopen_awaiting_login()
         self.load_devices()
 
     def _fill_device_list(self):
