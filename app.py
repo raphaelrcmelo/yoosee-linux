@@ -1664,6 +1664,12 @@ def main():
     global _dispatcher
     app = QApplication(sys.argv)
     app.setApplicationName("Câmeras Yoosee")
+    # No Wayland o painel liga a janela ao atalho pelo app_id = nome do .desktop; sem isso a
+    # janela aparece como outro programa, com ícone genérico (engrenagem), separada do atalho.
+    # install.sh cria yoosee-viewer.desktop; no Flatpak o .desktop tem o nome do FLATPAK_ID.
+    desktop_name = os.environ.get("FLATPAK_ID") or "yoosee-viewer"
+    app.setDesktopFileName(desktop_name)
+    app.setWindowIcon(QIcon.fromTheme(desktop_name, QIcon.fromTheme("camera-video")))
     theme = store.get_setting("theme", "dark")
     apply_theme(app, theme)
     _dispatcher = _Dispatcher()
