@@ -544,7 +544,10 @@ class ChannelView(QFrame):
         self.audio_player = QMediaPlayer()
         self.audio_player.setAudioOutput(self.remote_audio)
 
-        for w in (self, self.video, self.placeholder, self.body):
+        # Cliques: só no próprio quadro. Vídeo e placeholder não aceitam o evento de mouse, então
+        # ele sobe até aqui; vigiar também os filhos fazia o duplo clique chegar 2x e o foco
+        # ligava e desligava na mesma hora (parecia que o duplo clique não fazia nada).
+        for w in (self, self.body):
             w.installEventFilter(self)
         self._refresh_header()
 
